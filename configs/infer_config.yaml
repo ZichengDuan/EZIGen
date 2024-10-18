@@ -1,0 +1,35 @@
+# checkpoint name
+checkpoint_path: /path/to/the/checkpoint
+
+# system defaults
+local_rank: 0
+resolution: 512
+subject_denoise_timestep: 1
+pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
+add_before_ca: true
+ref_feat_position: "before_sa"
+insert_adapter_at: all
+infer_mode: true
+gradient_accumulation_steps: 1
+mixed_precision: 'no'
+revision: null
+non_ema_revision: null
+enable_xformers_memory_efficient_attention: false
+allow_tf32: false
+scale_lr: false
+use_8bit_adam: false
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_weight_decay: 0.01
+adam_epsilon: 0.00000001
+max_grad_norm: 1.0
+push_to_hub: false
+hub_token: null
+prediction_type: null
+hub_model_id: null
+dataloader_num_workers: 0
+max_train_steps: null
+snr_gamma: null
+variant: null
+residual_connection: true
+infer_mode: true
