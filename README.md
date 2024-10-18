@@ -17,7 +17,7 @@
 <br>
         <a href="https://arxiv.org/abs/2409.08091"><img src='https://img.shields.io/badge/arxiv-EZIGen-red
         ' alt='Paper PDF'></a>
-        <a href='https://zichengduan.github.io/pages/EZIGen/index.html/'><img src='https://img.shields.io/badge/Project_Page-EZIGen-green
+        <a href='https://zichengduan.github.io/pages/EZIGen/index.html'><img src='https://img.shields.io/badge/Project_Page-EZIGen-green
         ' alt='Project Page'></a>
         <a href='https://github.com/huggingface/diffusers'><img src='https://img.shields.io/badge/Library-Diffusers-blue
         ' alt='Library'></a>
