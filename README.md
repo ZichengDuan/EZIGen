@@ -120,6 +120,7 @@ Some input examples are presented in `example_images/source_images_with_masks`.
 This project refer some of the code from [AnyDoor](https://github.com/ali-vilab/AnyDoor), shout out to this great work!
 
 #  Citation
+If you find this codebase useful for your research, please cite as follows:
 ```
 @article{duan2024ezigen,
   title={EZIGen: Enhancing zero-shot subject-driven image generation with precise subject encoding and decoupled guidance},
