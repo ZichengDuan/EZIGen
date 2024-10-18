@@ -5,9 +5,10 @@ This repository contains the **official** PyTorch implementation of the paper [E
 ![dataset](misc/first3.jpg)
 
 ## TODO List
-- [x] Demo Pages
-- [ ] Huggingface Demo
-- [ ] Code Release
-- [ ] Checkpoints
+- [x] Demo pages
+- [ ] Inference code and checkpoint
+- [ ] Training code and data loader
+- [ ] Huggingface demo
+
 
 
