@@ -56,7 +56,7 @@ Install remaining dependencies
 pip install -r requirements.txt
 ```
 # Checkpoints
-Download the checkpoint(`checkpoint-200000.zip`, ~6.5GB) from [Google Drive](https://drive.google.com/file/d/1YWG4EQeyUEcs-hjORt8CP2fwGqEWM7Zm/view?usp=sharing), unzip it to your local folder.
+Download the checkpoint(`checkpoint-200000.zip`, ~6.5GB) from [Google Drive](https://drive.google.com/file/d/1IEymR4Mk44SsL1eqAbgHXe5LBYL7ud81/view?usp=sharing), unzip it to your local folder.
 
 # Inference
 We provide inference code for both subject-driven generation task and subject-driven image editing. 
