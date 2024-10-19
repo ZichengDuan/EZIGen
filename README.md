@@ -61,11 +61,11 @@ pip install -r requirements.txt
 Download the checkpoint(`checkpoint-200000.zip`, ~6.5GB) from [Google Drive](https://drive.google.com/file/d/1IEymR4Mk44SsL1eqAbgHXe5LBYL7ud81/view?usp=sharing), unzip it to your local folder.
 
 # Inference
-We provide inference code for both subject-driven generation task and subject-driven image editing. 
+We provide inference code for both subject-driven generation tasks and subject-driven image editing. Exemplary results can be found in the `outputs` folder.
 
 Please first turn to `config/infer_config.yaml` to assign a correct checkpoint folder path (e.g. `checkpoint-200000/`).
 ## 1. Subject-Driven Generation & Human Content Generation
-The script for subject driven generation and human content generation is provided in `infer_generation.sh`:
+The script for subject-driven generation and human content generation is provided in `infer_generation.sh`:
 ```
 # infer_generation.sh
 python infer.py \
@@ -109,7 +109,7 @@ python infer.py \
     --do_editing
     # --num_interations 6
 ```
-Some explainations to the arguments:
+Some explanations to the arguments:
 1. Similar to `--sub_prompt`, `--tar_prompt` is also a placeholder now as the editing process doesn't require text prompt.
 
 2. `source_image_path`: the path to the source RGB image for editing.
