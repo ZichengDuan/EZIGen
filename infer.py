@@ -1,4 +1,3 @@
-# 1. 标准库导入
 import sys
 import os
 import time
@@ -14,7 +13,6 @@ import copy
 from argparse import ArgumentParser
 from glob import glob
 
-# 2. 第三方库导入
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -40,13 +38,11 @@ import os
 import gc
 import clip
 
-# Hugging Face transformers 和 accelerate 库
 from transformers import CLIPTextModel, CLIPTokenizer, CLIPProcessor, CLIPModel, AutoImageProcessor, AutoModel
 from transformers.utils import logging as transformers_logging
 from transformers.utils import ContextManagers
 from transformers.utils import logging as hf_logging
 
-# Hugging Face diffusers 库
 import diffusers
 from diffusers import (
     AutoencoderKL, DDPMScheduler, DDIMScheduler, StableDiffusionPipeline, UNet2DConditionModel, 
@@ -57,13 +53,11 @@ from diffusers.training_utils import EMAModel, compute_snr
 from diffusers.optimization import get_scheduler
 from diffusers.utils.testing_utils import enable_full_determinism
 
-# accelerate 库
 from accelerate.utils import ProjectConfiguration, set_seed
 from accelerate.state import AcceleratorState
 from accelerate.logging import get_logger
 from accelerate import Accelerator
 
-# 3. 自定义模块导入
 from models.inversion_models import InversePipelinePartial, ExceptionCLIPTextModel, partial_inverse
 from models.utils import extract_subject_features, add_noise_to_image, calculate_dino_similarity, compute_clip_similarity, resize_image_to_fit_short
 from models.main_unet.unet_main import UNet2DConditionModel_main
@@ -71,7 +65,6 @@ from models.reference_unet.unet_ref import UNet2DConditionModel_ref
 from models.main_unet.adapter import Attention_Adapter  # my model
 from models.pipelines.pipline_sd_main import StableDiffusionPipeline_main
 
-# 4. 禁用警告和日志配置
 transformers_logging.set_verbosity_error()
 warnings.filterwarnings("ignore", category=FutureWarning, module="diffusers")
 warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
@@ -92,8 +85,6 @@ def copy_matched_parameters(model_src, model_dst):
     for name, param in src_state_dict.items():
         if name in dst_state_dict and dst_state_dict[name].shape == param.shape:
             dst_state_dict[name].copy_(param)
-            #
-    # print(f"参数已复制！！")
 
 
 def load_clip_model(device):
@@ -231,9 +222,8 @@ def iteration_wrapper(args, accelerator, subject_img_path, unet, reference_unet,
                                 latents=None,
                                 latents_steps=None,
                                 foreground_mask= None,
-                                # negative_prompt='Blur, dizzy, defocus, dark, dim',
                                 guidance_scale=args.guidance_scale
-                                )  # type: ignore
+                                ) 
 
         pure_text_image = res_origin["images"][0]
         pure_text_image.save(f"{output_root}/{target_prompt}{post_fix}/pure_text_image.png")
@@ -282,10 +272,8 @@ def iteration_wrapper(args, accelerator, subject_img_path, unet, reference_unet,
 
 
 def load_config_and_args():
-    # 初始化argparse
     parser = argparse.ArgumentParser(description="Command line argument parser")
 
-    # 添加命令行参数
     parser.add_argument('--config', type=str, required=True, help="Path to the YAML configuration file")
     parser.add_argument('--tar_prompt', type=str, required=True, help="Target prompt string")
     parser.add_argument('--sub_prompt', type=str, required=True, help="Subject prompt string")
@@ -307,23 +295,16 @@ def load_config_and_args():
     parser.add_argument('--output_root', type=str, default="experiments/debug_gradio")
     parser.add_argument('--num_interations', type=int, default=-1)
 
-    # 解析命令行参数
     args = parser.parse_args()
 
-    # 读取 YAML 配置文件
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
 
-    # 将 YAML 配置中的参数更新到 args 中
     for key, value in config.items():
         setattr(args, key, value)
 
     return args
 
-
-def obtain_object_foreground():
-    # use grounded sam to 
-    pass
 
 
 def extract_attention_params(attn1):
@@ -339,7 +320,6 @@ def extract_attention_params(attn1):
     }
 
 
-# 辅助函数：初始化 Attention_Adapter
 def initialize_adapter(params, args):
     return Attention_Adapter(
         query_dim=params['query_dim'],
