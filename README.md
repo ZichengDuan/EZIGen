@@ -14,20 +14,14 @@
 <sup>2</sup>Xidian University |
 <sup>3</sup>Monash University |
 <sup>4</sup>Leonardo.AI 
-<br>
-        <a href="https://arxiv.org/abs/2409.08091"><img src='https://img.shields.io/badge/arxiv-EZIGen-red
-        ' alt='Paper PDF'></a>
-        <a href='https://zichengduan.github.io/pages/EZIGen/index.html'><img src='https://img.shields.io/badge/Project_Page-EZIGen-green
-        ' alt='Project Page'></a>
-        <a href='https://github.com/huggingface/diffusers'><img src='https://img.shields.io/badge/Library-Diffusers-blue
-        ' alt='Library'></a>
-        <br>
-</div>
-<br>
+
+[![arxiv](https://img.shields.io/badge/arxiv-EZIGen-red)](https://arxiv.org/abs/2409.08091)
+[![Demo](https://img.shields.io/badge/Project_Page-EZIGen-green)]([https://arxiv.org/abs/2409.08091](https://zichengduan.github.io/pages/EZIGen/index.html))
+[![Library](https://img.shields.io/badge/Library-Diffusers-blue)]([https://arxiv.org/abs/2409.08091](https://github.com/huggingface/diffusers))
 
 ![dataset](misc/first4.jpg)
 ![dataset](misc/main4.jpg)
-
+</div>
 
 # TODO List
 - [x] Demo pages
