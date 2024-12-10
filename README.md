@@ -117,7 +117,7 @@ This project refers to some of the code from [AnyDoor](https://github.com/ali-vi
 If you find this codebase useful for your research, please cite as follows:
 ```
 @article{duan2024ezigen,
-  title={EZIGen: Enhancing zero-shot subject-driven image generation with precise subject encoding and decoupled guidance},
+  title={EZIGen: Enhancing zero-shot personalized image generation with precise subject encoding and decoupled guidance},
   author={Duan, Zicheng and Ding, Yuxuan and Gou, Chenhui and Zhou, Ziqin and Smith, Ethan and Liu, Lingqiao},
   journal={arXiv preprint arXiv:2409.08091},
   year={2024}
