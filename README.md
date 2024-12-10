@@ -1,7 +1,7 @@
 
 ![dataset](misc/EZIGen.png)
 <div align="center">
-<h1>EZIGen: Enhancing zero-shot subject-driven image generation with precise subject encoding and decoupled guidance</h1>
+<h1>EZIGen: Enhancing zero-shot personalized image generation with precise subject encoding and decoupled guidance</h1>
 <div>
     <a href='https://zichengduan.github.io' target='_blank'>Zicheng Duan<sup>1</sup></a>;
     <a href='https://scholar.google.com/citations?user=uOii3uEAAAAJ&hl=zh-CN' target='_blank'>Yuxuan Ding<sup>2</sup></a>;
@@ -19,8 +19,6 @@
 [![Demo](https://img.shields.io/badge/Project_Page-EZIGen-green)]([https://arxiv.org/abs/2409.08091](https://zichengduan.github.io/pages/EZIGen/index.html))
 [![Library](https://img.shields.io/badge/Library-Diffusers-blue)]([https://arxiv.org/abs/2409.08091](https://github.com/huggingface/diffusers))
 
-![dataset](misc/first4.jpg)
-![dataset](misc/main4.jpg)
 </div>
 
 # TODO List
@@ -75,12 +73,12 @@ python infer.py \
     --output_root "outputs/" \
     # --num_interations 6
 ```
-Some explainations to the arguments:
-1. `split_ratio=0.4` means that we leave the last 40% timesteps for Appearance Transfer, the first 60% steps for Layout Generation Process. the value ranges from 0 to 1 in which large value indicates more Appearance Transfer.
+Some explanations for the arguments:
+1. `split_ratio=0.4` means that we leave the last 40% of timesteps for Appearance Transfer, the first 60% steps for Layout Generation Process. the value ranges from 0 to 1 in which large value indicates more Appearance Transfer.
 
-2. `sim_threshold` is the CLIP similarity threshold for autostop. `sub_prompt` acts as a place holder, however, it's always recommended to type-in the correct class name of the subject image for best subject feature extraction. 
+2. `sim_threshold` is the CLIP similarity threshold for autostop. `sub_prompt` acts as a placeholder, however, it's always recommended to type in the correct class name of the subject image for best subject feature extraction. 
 
-3. `# --num_interations 6` is by default set to -1 to give way to autostop machanism (with a minimum of 3 and maximum of 10 iterations), however you can uncomment this line and assign the desired iteration number.
+3. `# --num_interations 6` is by default set to -1 to give way to the autostop mechanism (with a minimum of 3 and maximum of 10 iterations), however, you can uncomment this line and assign the desired iteration number.
 
 Some subjects are presented in `example_images/subjects`.
 
@@ -103,7 +101,7 @@ python infer.py \
     --do_editing
     # --num_interations 6
 ```
-Some explanations to the arguments:
+Some explanations for the arguments:
 1. Similar to `--sub_prompt`, `--tar_prompt` is also a placeholder now as the editing process doesn't require text prompt.
 
 2. `source_image_path`: the path to the source RGB image for editing.
@@ -113,7 +111,7 @@ Some explanations to the arguments:
 Some input examples are presented in `example_images/source_images_with_masks`.
 
 # Acknowledgements
-This project refer some of the code from [AnyDoor](https://github.com/ali-vilab/AnyDoor), shout out to this great work!
+This project refers to some of the code from [AnyDoor](https://github.com/ali-vilab/AnyDoor), shout out to this great work!
 
 #  Citation
 If you find this codebase useful for your research, please cite as follows:
