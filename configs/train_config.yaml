@@ -1,0 +1,111 @@
+# I/O
+pretrained_model_name_or_path: stabilityai/stable-diffusion-2-1-base
+clip_path: /path/to/ViT-B-32.pt # or simply "ViT-B/32" and let transformers module do its job
+output_dir: experiments/
+
+# UNet configs
+add_before_ca: true # determine where to register the adapter, before_ca indicates before cross-attention
+skip_adapter_ratio: 0
+
+# subject extraction settings
+sub_feat_position: "before_sa" # where to extract subject feature: [before_sa], after_sa, after_ca, after_ff
+subject_timestep: 1
+ 
+# datasets
+train_batch_size: 1
+train_data_ratio: 1
+resolution: 512
+drop_reference_ratio: 0.2
+
+with_coco: false
+with_youtube_vis: true
+
+num_sub_img: 4
+coco2014:
+  subset_size: 100000
+  data_path: data/coco2014
+  train_split: "trainval"
+  
+youtubeVIS:
+  subset_size: 100000
+  image_dir: data/youtubeVIS_ori/JPEGImages/
+  anno: data/youtubeVIS_ori/Annotations/
+  meta: data/youtubeVIS_ori/meta.json
+
+# training
+num_train_epochs: 1
+checkpointing_steps: 5000
+validation_steps: 5000
+learning_rate: 0.0001
+lr_scheduler: "constant"
+lr_warmup_steps: 0
+seed: 3154
+local_rank: -1
+dataloader_num_workers: 9
+
+# validation and checkpointing
+checkpoints_total_limit: 3
+resume_from_checkpoint: latest
+dreambench_output_dir: null
+report_to: "tensorboard"
+tracker_project_name: "tensorboard"
+logging_dir: logs
+infer_logging_dir: logs_infer
+
+# validation and inference setting
+infer_steps: 50
+initial_loop: false
+split_ratio: 0.4
+
+# validation images
+target_prompt_1: "a backpack on the beach."
+subject_prompt_1:  
+  - "a photo of a backpack."
+subject_img_paths_1:
+  - "example_images/subjects/backpack.png"
+
+target_prompt_2: "a dog under a tree."
+subject_prompt_2: 
+  - "a photo of a dog."
+subject_img_paths_2:
+  - "example_images/subjects/dog.png"
+
+target_prompt_3: "a dog in police outfit."
+subject_prompt_3: 
+  - "a photo of a dog."
+subject_img_paths_3:
+  - "example_images/subjects/dog6.png"
+
+target_prompt_4: "a woman wearing a rainbow scarf."
+subject_prompt_4: 
+  - "a photo of a woman."
+subject_img_paths_4:
+  - "example_images/subjects/lifeifei.png"
+
+
+# defaults
+gradient_accumulation_steps: 1
+revision: null
+non_ema_revision: null
+enable_xformers_memory_efficient_attention: false
+allow_tf32: false
+scale_lr: false
+use_8bit_adam: false
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_weight_decay: 0.01
+adam_epsilon: 0.00000001
+max_grad_norm: 1.0
+push_to_hub: false
+hub_token: null
+prediction_type: null
+hub_model_id: null
+max_train_steps: null
+snr_gamma: null
+residual_connection: true
+variant: null
+config: dummy_config.yaml # dummy placeholder for argparser
+
+# configs used only during inference, no need to change
+do_editing: false # this is used 
+num_interations: -1

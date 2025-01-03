@@ -64,7 +64,7 @@ class UNet2DConditionOutput(BaseOutput):
     """
 
     sample: torch.FloatTensor = None
-    self_attn_results_all_blocks: torch.FloatTensor = None
+    subject_features: torch.FloatTensor = None
 
 
 class UNet2DConditionModel_ref(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin, PeftAdapterMixin):
@@ -1213,7 +1213,7 @@ class UNet2DConditionModel_ref(ModelMixin, ConfigMixin, UNet2DConditionLoadersMi
             is_adapter = True
 
         down_block_res_samples = (sample,)
-        self_attn_results_all_blocks = []
+        subject_features = []
         for downsample_block in self.down_blocks:
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
                 # For t2i-adapter CrossAttnDownBlock2D
@@ -1231,7 +1231,7 @@ class UNet2DConditionModel_ref(ModelMixin, ConfigMixin, UNet2DConditionLoadersMi
                     args=args,
                     **additional_residuals,
                 )
-                self_attn_results_all_blocks.extend(self_attn_results)
+                subject_features.extend(self_attn_results)
                 
             else:
                 sample, res_samples = downsample_block(hidden_states=sample, temb=emb, scale=lora_scale)
@@ -1263,7 +1263,7 @@ class UNet2DConditionModel_ref(ModelMixin, ConfigMixin, UNet2DConditionLoadersMi
                     encoder_attention_mask=encoder_attention_mask,
                     args=args,
                 )
-                self_attn_results_all_blocks.extend(self_attn_results)
+                subject_features.extend(self_attn_results)
                 
                 
             else:
@@ -1303,7 +1303,7 @@ class UNet2DConditionModel_ref(ModelMixin, ConfigMixin, UNet2DConditionLoadersMi
                     encoder_attention_mask=encoder_attention_mask,
                     args=args,
                 )
-                self_attn_results_all_blocks.extend(self_attn_results)
+                subject_features.extend(self_attn_results)
                 
             else:
                 sample = upsample_block(
@@ -1316,7 +1316,7 @@ class UNet2DConditionModel_ref(ModelMixin, ConfigMixin, UNet2DConditionLoadersMi
         
         # # ========================================================================================
         if hasattr(self, "learnable_weights"):
-            self_attn_results_all_blocks = [component_feat * learnable_param for (component_feat, learnable_param) in zip(self_attn_results_all_blocks, self.learnable_weights)]
+            subject_features = [component_feat * learnable_param for (component_feat, learnable_param) in zip(subject_features, self.learnable_weights)]
         # # ========================================================================================
         
         # 6. post-process
@@ -1330,6 +1330,6 @@ class UNet2DConditionModel_ref(ModelMixin, ConfigMixin, UNet2DConditionLoadersMi
             unscale_lora_layers(self, lora_scale)
 
         if not return_dict:
-            return (sample, self_attn_results_all_blocks)
+            return (sample, subject_features)
 
-        return UNet2DConditionOutput(sample=sample, self_attn_results_all_blocks=self_attn_results_all_blocks)
+        return UNet2DConditionOutput(sample=sample, subject_features=subject_features)

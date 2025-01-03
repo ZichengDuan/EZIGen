@@ -958,10 +958,10 @@ class UNet2DConditionModel_main(ModelMixin, ConfigMixin, UNet2DConditionLoadersM
         down_intrablock_additional_residuals: Optional[Tuple[torch.Tensor]] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
         return_dict: bool = True,
-        reference_feats: Optional[list[torch.Tensor]] = None,
+        subject_feats: Optional[list[torch.Tensor]] = None,
         inf_timestep=None,
         args=None,
-        foreground_mask = None,
+        training_attn_mask = None,
     ) -> Union[UNet2DConditionOutput, Tuple]:
         r"""
         The [`UNet2DConditionModel`] forward method.
@@ -1120,7 +1120,11 @@ class UNet2DConditionModel_main(ModelMixin, ConfigMixin, UNet2DConditionLoadersM
             )
             down_intrablock_additional_residuals = down_block_additional_residuals
             is_adapter = True
-
+        # ========================================================================================
+        if hasattr(self, "learnable_weights") and subject_feats is not None:
+            subject_feats = [subject_feat * learnable_param for (subject_feat, learnable_param) in zip(subject_feats, self.learnable_weights)]
+        # # ========================================================================================
+        
         down_block_res_samples = (sample,)
         feat_count = 0
         
@@ -1131,17 +1135,17 @@ class UNet2DConditionModel_main(ModelMixin, ConfigMixin, UNet2DConditionLoadersM
                 if is_adapter and len(down_intrablock_additional_residuals) > 0:
                     additional_residuals["additional_residuals"] = down_intrablock_additional_residuals.pop(0)
 
-                sample, res_samples, reference_feats = downsample_block(
+                sample, res_samples, subject_feats = downsample_block(
                     hidden_states=sample,
                     temb=emb,
                     encoder_hidden_states=encoder_hidden_states,
                     attention_mask=attention_mask,
                     cross_attention_kwargs=cross_attention_kwargs,
                     encoder_attention_mask=encoder_attention_mask,
-                    reference_feats=reference_feats,
+                    subject_feats=subject_feats,
                     inf_timestep=inf_timestep,
                     args = args,
-                    foreground_mask = foreground_mask,
+                    training_attn_mask = training_attn_mask,
                     **additional_residuals,
                 )
                 feat_count += 1
@@ -1166,16 +1170,16 @@ class UNet2DConditionModel_main(ModelMixin, ConfigMixin, UNet2DConditionLoadersM
         # 4. mid
         if self.mid_block is not None:
             if hasattr(self.mid_block, "has_cross_attention") and self.mid_block.has_cross_attention:
-                sample, reference_feats = self.mid_block(
+                sample, subject_feats = self.mid_block(
                     sample,
                     emb,
                     encoder_hidden_states=encoder_hidden_states,
                     attention_mask=attention_mask,
                     cross_attention_kwargs=cross_attention_kwargs,
-                    reference_feats=reference_feats,
+                    subject_feats=subject_feats,
                     encoder_attention_mask=encoder_attention_mask,
                     inf_timestep=inf_timestep,
-                    foreground_mask = foreground_mask,
+                    training_attn_mask = training_attn_mask,
                     args = args,
                 )
                 feat_count += 1
@@ -1206,7 +1210,7 @@ class UNet2DConditionModel_main(ModelMixin, ConfigMixin, UNet2DConditionLoadersM
                 upsample_size = down_block_res_samples[-1].shape[2:]
 
             if hasattr(upsample_block, "has_cross_attention") and upsample_block.has_cross_attention:
-                sample, reference_feats = upsample_block(
+                sample, subject_feats = upsample_block(
                     hidden_states=sample,
                     temb=emb,
                     res_hidden_states_tuple=res_samples,
@@ -1214,10 +1218,10 @@ class UNet2DConditionModel_main(ModelMixin, ConfigMixin, UNet2DConditionLoadersM
                     cross_attention_kwargs=cross_attention_kwargs,
                     upsample_size=upsample_size,
                     attention_mask=attention_mask,
-                    reference_feats=reference_feats,
+                    subject_feats=subject_feats,
                     encoder_attention_mask=encoder_attention_mask,
                     inf_timestep=inf_timestep,
-                    foreground_mask = foreground_mask,
+                    training_attn_mask = training_attn_mask,
                     args = args
                 )
                 feat_count += 1

@@ -26,7 +26,7 @@ from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import maybe_allow_in_graph
 from diffusers.models.lora import LoRACompatibleLinear, LoRALinearLayer
 import cv2
-from models.utils import visualize_attn
+from utils import visualize_attn
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 

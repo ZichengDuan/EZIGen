@@ -59,7 +59,7 @@ from accelerate.logging import get_logger
 from accelerate import Accelerator
 
 from models.inversion_models import InversePipelinePartial, ExceptionCLIPTextModel, partial_inverse
-from models.utils import extract_subject_features, add_noise_to_image, calculate_dino_similarity, compute_clip_similarity, resize_image_to_fit_short
+from utils import extract_subject_features, add_noise_to_image, calculate_dino_similarity, compute_clip_similarity, resize_image_to_fit_short
 from models.main_unet.unet_main import UNet2DConditionModel_main
 from models.reference_unet.unet_ref import UNet2DConditionModel_ref
 from models.main_unet.adapter import Attention_Adapter  # my model
@@ -92,7 +92,7 @@ def load_clip_model(device):
     return model, preprocess
 
 
-def loop_infer(args, subject_img_path, subject_features, vae, noise_scheduler, weight_dtype, target_prompt, subject_prompt, train_transforms, generator, init_image, sim_threshold=0.98, pipeline=None, output_root=None, post_fix=None, reference_unet=None, exclip=None, inverse_pipeline=None, unet=None, clip_model=None, clip_preprocess=None, foreground_mask=None, initial_image_size = None, source_image_path=None):
+def loop_infer(args, subject_img_path, subject_features, vae, noise_scheduler, weight_dtype, target_prompt, subject_prompt, train_transforms, generator, init_image, sim_threshold=0.98, pipeline=None, output_root=None, post_fix=None, reference_unet=None, exclip=None, inverse_pipeline=None, main_unet=None, clip_model=None, clip_processor=None, foreground_mask=None, initial_image_size = None, source_image_path=None):
     """
     input: 
     """
@@ -123,23 +123,23 @@ def loop_infer(args, subject_img_path, subject_features, vae, noise_scheduler, w
                 # only use the latents from the first round
                 inversed_intermediate_latents = original_inversed_intermediate_latents
         else:
-            noisy_latents = add_noise_to_image(split_ratio * 1000, generator, args, loop_image, vae, train_transforms, noise_scheduler=noise_scheduler)
+            noisy_latents = add_noise_to_image(noise_step = split_ratio * noise_scheduler.config.num_train_timesteps, args=args, img=loop_image, vae=vae, train_transforms=train_transforms, noise_scheduler=noise_scheduler)
 
         skipped_steps = int(args.infer_steps - split_ratio * args.infer_steps)
-
+        
         with torch.no_grad():
             res = pipeline(
                 target_prompt if not args.do_editing else target_prompt,
-                num_inference_steps=args.infer_steps, generator=generator,
-                references= subject_features,
+                num_inference_steps=args.infer_steps, 
+                generator=generator,
+                subject_features= subject_features,
                 image_paths=subject_img_path,
                 weight_dtype=weight_dtype,
                 train_transforms=train_transforms,
-                ref_text=subject_prompt,
+                subject_prompt=subject_prompt,
                 args=args,
                 latents=noisy_latents,
                 latents_steps=skipped_steps,
-                reference_unet=reference_unet,
                 foreground_mask=foreground_mask,
                 guidance_scale = 2 if args.do_editing else args.guidance_scale,
                 inversed_intermediate_latents=inversed_intermediate_latents if args.do_editing else None
@@ -148,18 +148,17 @@ def loop_infer(args, subject_img_path, subject_features, vae, noise_scheduler, w
         origin_loop_image = loop_image.resize(initial_image_size)
         origin_loop_image.save(f"{output_root}/{target_prompt}{post_fix}/loop_{cur_loop_num}.png")
 
-        sim = compute_clip_similarity(clip_model, clip_preprocess, image1=prev_image, image2=loop_image, device=device)
+        sim = compute_clip_similarity(clip_model, clip_processor, image1=prev_image, image2=loop_image, device=device)
 
         prev_image = loop_image
         print(f"[Validation {target_prompt}{post_fix}][Loop {cur_loop_num}] Overall Similarity: {sim}.")
-
         cur_loop_num += 1
 
     torch.cuda.empty_cache()
     return loop_image
 
 
-def iteration_wrapper(args, accelerator, subject_img_path, unet, reference_unet, text_encoder, tokenizer, vae,  noise_scheduler, weight_dtype, target_prompt, subject_prompt, train_transforms, generator=None, output_root=None, post_fix="", pipeline=None, exclip=None, inverse_pipeline=None, clip_model=None, clip_preprocess=None, source_image_path=None, foreground_mask_path=None):
+def iteration_wrapper(args, accelerator, subject_img_path, main_unet, reference_unet, text_encoder, tokenizer, vae,  noise_scheduler, weight_dtype, target_prompt, subject_prompt, train_transforms, generator=None, output_root=None, post_fix="", pipeline=None, exclip=None, inverse_pipeline=None, clip_model=None, clip_processor=None, source_image_path=None, foreground_mask_path=None):
     """
     1. load load prompts and ref image features
     2. initial loop, gte the initial image and hard masks (all)
@@ -170,7 +169,7 @@ def iteration_wrapper(args, accelerator, subject_img_path, unet, reference_unet,
         iii: provide given noise and give mask
         iv: 
     """
-    # load all ref unet feature
+    # load all subject feature
     subject_features  = extract_subject_features(args, subject_img_path, reference_unet, text_encoder, tokenizer, vae, noise_scheduler, None,  weight_dtype, train_transforms, text=subject_prompt, subject_denoise_timestep=args.subject_denoise_timestep, device=reference_unet.device, generator=generator)
 
     # reshape subject feature for CFG
@@ -185,16 +184,16 @@ def iteration_wrapper(args, accelerator, subject_img_path, unet, reference_unet,
     args.skip_adapter_ratio = 0
     generator.manual_seed(int(args.seed))
     res = pipeline(target_prompt, num_inference_steps=args.infer_steps, generator=generator,
-                    references = subject_features, 
+                    subject_features = subject_features, 
                     image_paths= subject_img_path,
                     reference_unet=reference_unet,
                     weight_dtype= weight_dtype,
                     train_transforms=train_transforms,
-                    ref_text= subject_prompt,
+                    subject_prompt= subject_prompt,
                     args=args,
                     latents=None,
                     latents_steps=None,
-                    # negative_prompt='Blur, dizzy, defocus',
+                    negative_prompt="dark, blur, defoucus, lack of content, dizzy.",
                     guidance_scale=args.guidance_scale
                     )
     simple_img = res["images"][0]
@@ -211,17 +210,19 @@ def iteration_wrapper(args, accelerator, subject_img_path, unet, reference_unet,
         # generate a image with pure text
         generator.manual_seed(int(args.seed))
         args.skip_adapter_ratio = 1
-        res_origin = pipeline(target_prompt, num_inference_steps=args.infer_steps, generator=generator,
-                                references = None,
+        res_origin = pipeline(target_prompt, 
+                                num_inference_steps=args.infer_steps,
+                                generator=generator,
+                                subject_features = None,
                                 image_paths= subject_img_path,
                                 reference_unet=reference_unet,
                                 weight_dtype= weight_dtype,
                                 train_transforms=train_transforms,
-                                ref_text= subject_prompt,
+                                subject_prompt= subject_prompt,
                                 args=args,
                                 latents=None,
                                 latents_steps=None,
-                                foreground_mask= None,
+                                negative_prompt="dark, blur, defoucus, lack of content, dizzy.",
                                 guidance_scale=args.guidance_scale
                                 ) 
 
@@ -232,16 +233,16 @@ def iteration_wrapper(args, accelerator, subject_img_path, unet, reference_unet,
         # decouple
         args.skip_adapter_ratio = 1 - args.split_ratio
         res = pipeline(target_prompt, num_inference_steps=args.infer_steps, generator=generator,
-                        references = subject_features,
+                        subject_features = subject_features,
                         image_paths= subject_img_path,
                         reference_unet=reference_unet,
                         weight_dtype= weight_dtype,
                         train_transforms=train_transforms,
-                        ref_text= subject_prompt,
+                        subject_prompt= subject_prompt,
                         args=args,
                         latents=None,
                         latents_steps=None,
-                        foreground_mask= None,
+                        negative_prompt="dark, blur, defoucus, lack of content, dizzy.",
                         guidance_scale=args.guidance_scale
                         ) 
 
@@ -252,7 +253,7 @@ def iteration_wrapper(args, accelerator, subject_img_path, unet, reference_unet,
 
     initial_image.save(f"{output_root}/{target_prompt}{post_fix}/initial_loop.png")
     # ==========================================================================
-    # merge maskds
+    # merge masks
     if args.do_editing:
         foreground_mask = Image.open(foreground_mask_path).convert('RGB')
         foreground_mask = resize_image_to_fit_short(foreground_mask, short_size=512)
@@ -266,8 +267,7 @@ def iteration_wrapper(args, accelerator, subject_img_path, unet, reference_unet,
 
     # start interation after decoupling operation
     args.skip_adapter_ratio = 0
-    final_image = loop_infer(args, subject_img_path, subject_features, vae, noise_scheduler, weight_dtype, target_prompt, subject_prompt, train_transforms, generator, initial_image_resized, sim_threshold=args.sim_threshold, pipeline=pipeline, output_root=output_root, post_fix=post_fix, reference_unet=reference_unet, exclip=exclip, inverse_pipeline=inverse_pipeline, unet=unet, clip_model=clip_model, clip_preprocess=clip_preprocess, foreground_mask=foreground_mask, initial_image_size=(W, H), source_image_path=source_image_path)
-
+    final_image = loop_infer(args, subject_img_path, subject_features, vae, noise_scheduler, weight_dtype, target_prompt, subject_prompt, train_transforms, generator, initial_image_resized, sim_threshold=args.sim_threshold, pipeline=pipeline, output_root=output_root, post_fix=post_fix, reference_unet=reference_unet, exclip=exclip, inverse_pipeline=inverse_pipeline, main_unet=main_unet, clip_model=clip_model, clip_processor=clip_processor, foreground_mask=foreground_mask, initial_image_size=(W, H), source_image_path=source_image_path)
     return final_image
 
 
@@ -275,9 +275,9 @@ def load_config_and_args():
     parser = argparse.ArgumentParser(description="Command line argument parser")
 
     parser.add_argument('--config', type=str, required=True, help="Path to the YAML configuration file")
-    parser.add_argument('--tar_prompt', type=str, required=True, help="Target prompt string")
-    parser.add_argument('--sub_prompt', type=str, required=True, help="Subject prompt string")
-    parser.add_argument('--sub_img_path', type=str, required=True, help="Subject image path")
+    parser.add_argument('--target_prompt', type=str, required=True, help="Target prompt string")
+    parser.add_argument('--subject_prompt', type=str, required=True, help="Subject prompt string")
+    parser.add_argument('--subject_img_path', type=str, required=True, help="Subject image path")
     
     # Subject driven editing
     parser.add_argument('--do_editing', action='store_true')
@@ -305,8 +305,6 @@ def load_config_and_args():
 
     return args
 
-
-
 def extract_attention_params(attn1):
     return {
         'query_dim': attn1.query_dim,
@@ -318,7 +316,6 @@ def extract_attention_params(attn1):
         'attention_out_bias': attn1.out_bias,
         'cross_attention_dim': None,
     }
-
 
 def initialize_adapter(params, args):
     return Attention_Adapter(
@@ -336,7 +333,7 @@ def initialize_adapter(params, args):
 
 def init_acclerator(args):
     accelerator_project_config = ProjectConfiguration(project_dir=args.output_root)
-    accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps,mixed_precision=args.mixed_precision,project_config=accelerator_project_config,)
+    accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps,mixed_precision='no',project_config=accelerator_project_config,)
     return accelerator
 
 def load_models(args):
@@ -345,19 +342,19 @@ def load_models(args):
     tokenizer = CLIPTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer")
     text_encoder = CLIPTextModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, local_files_only=True)
     vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, local_files_only=True)
-    unet = UNet2DConditionModel_main.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision, local_files_only=True)
+    main_unet = UNet2DConditionModel_main.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision, local_files_only=True)
     reference_unet = UNet2DConditionModel_ref(args=args).from_pretrained(args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision, local_files_only=True)
     exclip = ExceptionCLIPTextModel.from_pretrained("stabilityai/stable-diffusion-2-1-base", subfolder="text_encoder", local_files_only=True)
-    clip_model, clip_preprocess = load_clip_model(device)
+    clip_model, clip_processor = clip.load(args.clip_path, device=device)
 
-    return noise_scheduler, tokenizer, text_encoder, vae, unet, reference_unet, exclip, clip_model, clip_preprocess
+    return main_unet, reference_unet, noise_scheduler, tokenizer, text_encoder, vae, exclip, clip_model, clip_processor
 
 
-def register_adapter(unet, reference_unet, args):
+def register_adapter_and_configs(main_unet, reference_unet, args):
     all_blocks = nn.ModuleList([])
-    all_blocks.extend(unet.down_blocks)
-    all_blocks.append(unet.mid_block)
-    all_blocks.extend(unet.up_blocks)
+    all_blocks.extend(main_unet.down_blocks)
+    all_blocks.append(main_unet.mid_block)
+    all_blocks.extend(main_unet.up_blocks)
 
     for num_down, unet_block in enumerate(all_blocks):
         if hasattr(unet_block, "has_cross_attention") and unet_block.has_cross_attention:
@@ -391,9 +388,10 @@ def register_adapter(unet, reference_unet, args):
                 attn.transformer_blocks[0].adapter = adapter
                 attn.transformer_blocks[0].adapter_norm = adapter_norm
 
-    reference_unet_learnable_weights = nn.Parameter(torch.ones(16))
-    reference_unet.learnable_weights = reference_unet_learnable_weights
     reference_unet.args = args
+    
+    main_unet.learnable_weights = nn.Parameter(torch.ones(16)).requires_grad_(True)
+    
 
 
 def load_checkpoint(accelerator, args):
@@ -402,13 +400,13 @@ def load_checkpoint(accelerator, args):
     accelerator.load_state(args.checkpoint_path)
     
 
-def load_pipelines(vae, text_encoder, tokenizer, unet, noise_scheduler, exclip, weight_dtype, args):
+def load_pipelines(vae, text_encoder, tokenizer, main_unet, noise_scheduler, exclip, weight_dtype, args):
     pipeline = StableDiffusionPipeline_main.from_pretrained(
         args.pretrained_model_name_or_path,
         vae=vae,
         text_encoder=text_encoder,
         tokenizer=tokenizer,
-        unet=unet,
+        unet=main_unet,
         safety_checker=None,
         revision=args.revision,
         variant=args.variant,
@@ -429,7 +427,7 @@ def main():
     # prepare enironment and spaces
     weight_dtype = torch.float32
     args = load_config_and_args()
-    os.makedirs(args.output_root, exist_ok=True)
+    
     if args.seed is not None:
         generator = torch.Generator(device=device).manual_seed(args.seed)
         set_seed(args.seed)
@@ -440,13 +438,14 @@ def main():
     accelerator = init_acclerator(args)
 
     # load models
-    noise_scheduler, tokenizer, text_encoder, vae, unet, reference_unet, exclip, clip_model, clip_preprocess = load_models(args)
+    main_unet, reference_unet, noise_scheduler, tokenizer, text_encoder, vae, exclip, clip_model, clip_processor = load_models(args)
+    
 
     # register adapter to attention blocks
-    register_adapter(unet, reference_unet, args)
+    register_adapter_and_configs(main_unet, reference_unet, args)
     
     # prepare models using accelerator
-    unet, reference_unet = accelerator.prepare(unet, reference_unet)
+    main_unet = accelerator.prepare(main_unet)
     
     # assign device
     text_encoder.to(device, dtype=weight_dtype)
@@ -458,14 +457,14 @@ def main():
     load_checkpoint(accelerator, args)
 
     # loading pipelines
-    pipeline, inverse_pipeline = load_pipelines(accelerator.unwrap_model(vae), accelerator.unwrap_model(text_encoder), tokenizer, accelerator.unwrap_model(unet), noise_scheduler, exclip, weight_dtype, args)
+    pipeline, inverse_pipeline = load_pipelines(accelerator.unwrap_model(vae), accelerator.unwrap_model(text_encoder), tokenizer, accelerator.unwrap_model(main_unet), noise_scheduler, exclip, weight_dtype, args)
     inverse_pipeline.to(device, dtype=weight_dtype)
     pipeline.to(device, dtype=weight_dtype)
 
     # subject driven generation
-    subject_img_path = args.sub_img_path
-    subject_prompt = args.sub_prompt
-    target_prompt = args.tar_prompt
+    subject_img_path = args.subject_img_path
+    subject_prompt = args.subject_prompt
+    target_prompt = args.target_prompt
 
     # subject-driven editing
     foreground_mask_path = args.foreground_mask_path
@@ -507,7 +506,7 @@ def main():
             "post_fix": post_fix,
             "args": args,
             "accelerator": accelerator,
-            "unet": unet,
+            "main_unet": main_unet,
             "reference_unet": reference_unet,
             "text_encoder": text_encoder,
             "tokenizer": tokenizer,
@@ -519,11 +518,11 @@ def main():
             "exclip": exclip,
             "inverse_pipeline": inverse_pipeline,
             "clip_model": clip_model,
-            "clip_preprocess": clip_preprocess,
+            "clip_processor": clip_processor,
         }
         
         iteration_wrapper(**kwargs)
-
+        os._exit(0)
 
 
 

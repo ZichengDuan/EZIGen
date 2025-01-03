@@ -1,17 +1,17 @@
 # checkpoint name
-checkpoint_path: /path/to/the/checkpoint
+pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
+checkpoint_path: /path/to/your/checkpoint # e.g. checkpoint-200000
+clip_path: /path/to/ViT-B-32.pt # or simply "ViT-B/32" and let transformers module do its job
 
-# system defaults
-local_rank: 0
+# system defaults, !no need to change anything here!
+local_rank: 0 # we only do inference on a single GPU
 resolution: 512
 subject_denoise_timestep: 1
-pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
 add_before_ca: true
-ref_feat_position: "before_sa"
+sub_feat_position: "before_sa"
 insert_adapter_at: all
 infer_mode: true
 gradient_accumulation_steps: 1
-mixed_precision: 'no'
 revision: null
 non_ema_revision: null
 enable_xformers_memory_efficient_attention: false
@@ -32,4 +32,6 @@ max_train_steps: null
 snr_gamma: null
 variant: null
 residual_connection: true
-infer_mode: true
+
+# no need to change
+infer_mode: true # we are now infer mode

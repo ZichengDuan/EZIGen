@@ -25,28 +25,6 @@ from diffusers.models.embeddings import SinusoidalPositionalEmbedding
 from diffusers.models.lora import LoRACompatibleLinear
 from diffusers.models.normalization import AdaLayerNorm, AdaLayerNormContinuous, AdaLayerNormZero, RMSNorm
 
-def compare_models(model1, model2):
-    # 获取两个模型的state_dict
-    state_dict1 = model1.state_dict()
-    state_dict2 = model2.state_dict()
-    
-    # 比较层的数量
-    if len(state_dict1) != len(state_dict2):
-        print("模型层的数量不相同。")
-        return False
-    
-    # 比较每个参数的键和值
-    for key in state_dict1:
-        if key not in state_dict2:
-            print(f"模型2缺少参数：{key}")
-            return False
-        if not torch.equal(state_dict1[key], state_dict2[key]):
-            print(f"参数不同于层：{key}")
-            return False
-            
-    print("模型的结构和参数都相同。")
-    return True
-
 
 def _chunked_feed_forward(
     ff: nn.Module, hidden_states: torch.Tensor, chunk_dim: int, chunk_size: int, lora_scale: Optional[float] = None
@@ -281,11 +259,11 @@ class BasicTransformerBlock_main(nn.Module):
         timestep: Optional[torch.LongTensor] = None,
         cross_attention_kwargs: Dict[str, Any] = None,
         class_labels: Optional[torch.LongTensor] = None,
-        reference_feats=None,
+        subject_feats=None,
         added_cond_kwargs: Optional[Dict[str, torch.Tensor]] = None,
         inf_timestep=None,
         args = None,
-        foreground_mask = None,
+        training_attn_mask = None,
     ) -> torch.FloatTensor:
         if inf_timestep == None:
             inf_timestep = 10000 # an aritrary big number
@@ -367,13 +345,13 @@ class BasicTransformerBlock_main(nn.Module):
             if self.pos_embed is not None:
                 norm_hidden_states = self.pos_embed(norm_hidden_states)
                 
-            adapter_attn_output, reference_feats = self.adapter(
+            adapter_attn_output, subject_feats = self.adapter(
                 norm_hidden_states,
                 encoder_hidden_states=encoder_hidden_states,
                 attention_mask=attention_mask,
-                reference_feats=reference_feats,
+                subject_feats=subject_feats,
                 inf_timestep=inf_timestep,
-                foreground_mask = foreground_mask,
+                training_attn_mask = training_attn_mask,
                 **cross_attention_kwargs,
             )
             
@@ -450,14 +428,14 @@ class BasicTransformerBlock_main(nn.Module):
                 if self.pos_embed is not None:
                     norm_hidden_states = self.pos_embed(norm_hidden_states)
 
-                adapter_attn_output, reference_feats = self.adapter(
+                adapter_attn_output, subject_feats = self.adapter(
                     norm_hidden_states,
                     # encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
                     encoder_hidden_states=encoder_hidden_states,
                     attention_mask=attention_mask,
-                    reference_feats=reference_feats,
+                    subject_feats=subject_feats,
                     inf_timestep=inf_timestep,
-                    foreground_mask = foreground_mask,
+                    training_attn_mask = training_attn_mask,
                     **cross_attention_kwargs,
                 )
                 if self.norm_type == "ada_norm_zero":
@@ -508,7 +486,7 @@ class BasicTransformerBlock_main(nn.Module):
         hidden_states = ff_output + hidden_states
         if hidden_states.ndim == 4:
             hidden_states = hidden_states.squeeze(1)
-        return hidden_states, reference_feats
+        return hidden_states, subject_feats
 
 
 

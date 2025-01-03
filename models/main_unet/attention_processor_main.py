@@ -19,12 +19,12 @@ import os
 sys.path.append("..")
 sys.path.append(".")
 import torch
-from models.utils import resize_single_channel_image
+from utils import resize_single_channel_image
 import matplotlib.pyplot as plt
 import math
 import torch.nn.functional as F
 from torch import nn
-from models.utils import visualize_attn,get_word_mask_according_to_text_emb
+from utils import visualize_attn,get_word_mask_according_to_text_emb
 from diffusers.image_processor import IPAdapterMaskProcessor
 from diffusers.utils import USE_PEFT_BACKEND, deprecate, logging
 from diffusers.utils.import_utils import is_xformers_available

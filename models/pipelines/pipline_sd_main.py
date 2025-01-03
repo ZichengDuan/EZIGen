@@ -18,7 +18,7 @@ sys.path.append("..")
 sys.path.append(".")
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Union
-from models.utils import extract_subject_features, find_subsequence, generate_attn_masks_for_each_block
+from utils import extract_subject_features, find_subsequence, generate_attn_masks_for_each_block
 import torch
 import torch.nn.functional as F
 from packaging import version
@@ -781,12 +781,10 @@ class StableDiffusionPipeline_main(
         clip_skip: Optional[int] = None,
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
-        references = None,
-        insertion_ids = None,
+        subject_features = None,
         args = None,
         image_paths = None,
-        reference_unet=None, 
-        ref_text=None,
+        subject_text=None,
         train_transforms = None,
         weight_dtype = None,
         latents_steps=0,
@@ -1011,9 +1009,9 @@ class StableDiffusionPipeline_main(
         
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                if references is not None:
-                    # if we are not dropping references and we are in later timestep, we use designated feature
-                    references_loop = copy.copy(references)
+                if subject_features is not None:
+                    # if we are not dropping subject_features and we are in later timestep, we use designated feature
+                    references_loop = copy.copy(subject_features)
                 else:
                     references_loop = None
 
@@ -1034,8 +1032,8 @@ class StableDiffusionPipeline_main(
                     cross_attention_kwargs=self.cross_attention_kwargs,
                     added_cond_kwargs=added_cond_kwargs,
                     return_dict=False,
-                    reference_feats=references_loop, # tensor(10092.2881, device='cuda:0'), tensor(-26348.4980, device='cuda:0')
-                    foreground_mask = foreground_mask,
+                    subject_feats=references_loop, # tensor(10092.2881, device='cuda:0'), tensor(-26348.4980, device='cuda:0')
+                    training_attn_mask = None,
                     inf_timestep=i,
                     args = args
                 )[0]
@@ -1064,7 +1062,7 @@ class StableDiffusionPipeline_main(
                 #     cross_attention_kwargs=self.cross_attention_kwargs,
                 #     added_cond_kwargs=added_cond_kwargs,
                 #     return_dict=False,
-                #     reference_feats=references_loop,
+                #     subject_feats=references_loop,
                 #     foreground_mask = foreground_mask,
                 #     inf_timestep=i,
                 #     args = args
@@ -1078,7 +1076,7 @@ class StableDiffusionPipeline_main(
                 #     cross_attention_kwargs=self.cross_attention_kwargs,
                 #     added_cond_kwargs=added_cond_kwargs,
                 #     return_dict=False,
-                #     # reference_feats=references_loop,
+                #     # subject_feats=references_loop,
                 #     # foreground_mask = foreground_mask,
                 #     inf_timestep=i,
                 #     args = args
@@ -1145,7 +1143,7 @@ class StableDiffusionPipeline_main(
         if not return_dict:
             return (image, has_nsfw_concept)
 
-        # del latent_model_input, references
+        # del latent_model_input, subject_features
         torch.cuda.empty_cache()
         
         return StableDiffusionPipelineOutput_main_v2(images=image, nsfw_content_detected=has_nsfw_concept)

@@ -991,8 +991,8 @@ class UNetMidBlock2DCrossAttn_main(nn.Module):
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         inf_timestep=None,
         args = None,
-        foreground_mask=None,
-        reference_feats=None,
+        training_attn_mask=None,
+        subject_feats=None,
     ) -> torch.FloatTensor:
         lora_scale = cross_attention_kwargs.get("scale", 1.0) if cross_attention_kwargs is not None else 1.0
         hidden_states = self.resnets[0](hidden_states, temb, scale=lora_scale)
@@ -1024,7 +1024,7 @@ class UNetMidBlock2DCrossAttn_main(nn.Module):
                     **ckpt_kwargs,
                 )
             else:
-                hidden_states, reference_feats = attn(
+                hidden_states, subject_feats = attn(
                     hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     cross_attention_kwargs=cross_attention_kwargs,
@@ -1033,12 +1033,12 @@ class UNetMidBlock2DCrossAttn_main(nn.Module):
                     inf_timestep=inf_timestep,
                     return_dict=False,
                     args = args,
-                    foreground_mask = foreground_mask,
-                    reference_feats=reference_feats,
+                    training_attn_mask = training_attn_mask,
+                    subject_feats=subject_feats,
                 )
                 hidden_states = resnet(hidden_states, temb, scale=lora_scale)
 
-        return hidden_states, reference_feats
+        return hidden_states, subject_feats
 
 
 class UNetMidBlock2DSimpleCrossAttn(nn.Module):
@@ -1550,10 +1550,10 @@ class CrossAttnDownBlock2D_main(nn.Module):
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
         additional_residuals: Optional[torch.FloatTensor] = None,
-        reference_feats=None,
+        subject_feats=None,
         inf_timestep=None,
         args = None,
-        foreground_mask = None,
+        training_attn_mask = None,
     ) -> Tuple[torch.FloatTensor, Tuple[torch.FloatTensor, ...]]:
         output_states = ()
 
@@ -1590,17 +1590,17 @@ class CrossAttnDownBlock2D_main(nn.Module):
                 )[0]
             else:
                 hidden_states = resnet(hidden_states, temb, scale=lora_scale)
-                hidden_states, reference_feats = attn(
+                hidden_states, subject_feats = attn(
                     hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     cross_attention_kwargs=cross_attention_kwargs,
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
-                    reference_feats=reference_feats,
+                    subject_feats=subject_feats,
                     return_dict=False,
                     inf_timestep=inf_timestep,
                     args = args,
-                    foreground_mask = foreground_mask,
+                    training_attn_mask = training_attn_mask,
                 )
 
             # apply additional residuals to the output of the last pair of resnet and attention blocks
@@ -1615,7 +1615,7 @@ class CrossAttnDownBlock2D_main(nn.Module):
 
             output_states = output_states + (hidden_states,)
 
-        return hidden_states, output_states, reference_feats
+        return hidden_states, output_states, subject_feats
 
 
 class DownBlock2D(nn.Module):
@@ -2935,10 +2935,10 @@ class CrossAttnUpBlock2D_main(nn.Module):
         upsample_size: Optional[int] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         encoder_attention_mask: Optional[torch.FloatTensor] = None,
-        reference_feats=None,
+        subject_feats=None,
         inf_timestep=None,
         args = None,
-        foreground_mask = None,
+        training_attn_mask = None,
     ) -> torch.FloatTensor:
         lora_scale = cross_attention_kwargs.get("scale", 1.0) if cross_attention_kwargs is not None else 1.0
         is_freeu_enabled = (
@@ -2995,7 +2995,7 @@ class CrossAttnUpBlock2D_main(nn.Module):
                 )[0]
             else:
                 hidden_states = resnet(hidden_states, temb, scale=lora_scale)
-                hidden_states, reference_feats = attn(
+                hidden_states, subject_feats = attn(
                     hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     cross_attention_kwargs=cross_attention_kwargs,
@@ -3004,15 +3004,15 @@ class CrossAttnUpBlock2D_main(nn.Module):
                     inf_timestep=inf_timestep,
                     return_dict=False,
                     args = args,
-                    foreground_mask = foreground_mask,
-                    reference_feats=reference_feats,
+                    training_attn_mask = training_attn_mask,
+                    subject_feats=subject_feats,
                 )
 
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:
                 hidden_states = upsampler(hidden_states, upsample_size, scale=lora_scale)
 
-        return hidden_states, reference_feats
+        return hidden_states, subject_feats
 
 
 class UpBlock2D(nn.Module):

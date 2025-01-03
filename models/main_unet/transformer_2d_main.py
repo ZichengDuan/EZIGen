@@ -39,7 +39,7 @@ class Transformer2DModelOutput(BaseOutput):
     """
 
     sample: torch.FloatTensor
-    reference_feats: list[torch.FloatTensor]
+    subject_feats: list[torch.FloatTensor]
 
 
 class Transformer2DModel_main(ModelMixin, ConfigMixin):
@@ -255,11 +255,11 @@ class Transformer2DModel_main(ModelMixin, ConfigMixin):
         cross_attention_kwargs: Dict[str, Any] = None,
         attention_mask: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
-        reference_feats=None,
+        subject_feats=None,
         return_dict: bool = True,
         args = None,
         inf_timestep=None,
-        foreground_mask = None,
+        training_attn_mask = None,
     ):
         """
         The [`Transformer2DModel`] forward method.
@@ -395,7 +395,7 @@ class Transformer2DModel_main(ModelMixin, ConfigMixin):
                     **ckpt_kwargs,
                 )
             else:
-                hidden_states, reference_feats = block(
+                hidden_states, subject_feats = block(
                     hidden_states,
                     attention_mask=attention_mask,
                     encoder_hidden_states=encoder_hidden_states,
@@ -404,8 +404,8 @@ class Transformer2DModel_main(ModelMixin, ConfigMixin):
                     cross_attention_kwargs=cross_attention_kwargs,
                     class_labels=class_labels,
                     args=args,
-                    foreground_mask=foreground_mask,
-                    reference_feats=reference_feats,
+                    training_attn_mask=training_attn_mask,
+                    subject_feats=subject_feats,
                     inf_timestep=inf_timestep
                 )
 
@@ -464,6 +464,6 @@ class Transformer2DModel_main(ModelMixin, ConfigMixin):
             )
 
         if not return_dict:
-            return (output, reference_feats)
+            return (output, subject_feats)
 
-        return Transformer2DModelOutput(sample=output, reference_feats = reference_feats)
+        return Transformer2DModelOutput(sample=output, subject_feats = subject_feats)

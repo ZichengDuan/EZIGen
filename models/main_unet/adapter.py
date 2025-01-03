@@ -26,24 +26,6 @@ if is_xformers_available():
 else:
     xformers = None
 
-def compare_models(model1, model2):
-    # 比较模型结构
-    model1_str = str(model1)
-    model2_str = str(model2)
-    if model1_str != model2_str:
-        print("模型结构不相同")
-        return False
-    else:
-        print("模型结构相同")
-    
-    # 比较模型参数
-    for (param1, param2) in zip(model1.parameters(), model2.parameters()):
-        if param1.data.ne(param2.data).sum() > 0:
-            print("模型参数不相同")
-            return False
-    
-    print("模型参数相同")
-    return True
 
 @maybe_allow_in_graph
 class Attention_Adapter(nn.Module):
@@ -307,9 +289,9 @@ class Attention_Adapter(nn.Module):
         hidden_states: torch.FloatTensor,
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
-        reference_feats = None,
+        subject_feats = None,
         inf_timestep=None,
-        foreground_mask = None,
+        training_attn_mask = None,
         **cross_attention_kwargs,
     ) -> torch.Tensor:
         r"""
@@ -345,9 +327,9 @@ class Attention_Adapter(nn.Module):
             hidden_states,
             encoder_hidden_states=encoder_hidden_states,
             attention_mask=attention_mask,
-            reference_feats=reference_feats,
+            subject_feats=subject_feats,
             inf_timestep=inf_timestep,
-            foreground_mask = foreground_mask,
+            training_attn_mask = training_attn_mask,
             **cross_attention_kwargs,
         )
 
@@ -560,7 +542,7 @@ class AttnProcessor2_0_Adapter:
         if not hasattr(F, "scaled_dot_product_attention"):
             raise ImportError("AttnProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0.")
 
-    def my_attn_with_ref_mask(q, k, ref_mask):
+    def my_attn_with_sub_mask(q, k, sub_mask):
         pass
     
     def __call__(
@@ -570,16 +552,16 @@ class AttnProcessor2_0_Adapter:
         encoder_hidden_states: Optional[torch.FloatTensor] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         temb: Optional[torch.FloatTensor] = None,
-        reference_feats=None,
+        subject_feats=None,
         scale: float = 1.0,
         inf_timestep=None,
-        foreground_mask = None,
+        training_attn_mask = None,
     ) -> torch.FloatTensor:
         
-        if reference_feats:
-            ref_feat = reference_feats.pop(0)
+        if subject_feats:
+            sub_feat = subject_feats.pop(0)
         else:
-            ref_feat = None
+            sub_feat = None
         residual = hidden_states
         if attn.spatial_norm is not None:
             hidden_states = attn.spatial_norm(hidden_states, temb)
@@ -602,10 +584,10 @@ class AttnProcessor2_0_Adapter:
         
         query = attn.to_q(hidden_states, *args)
 
-        if ref_feat is not None:
+        if sub_feat is not None:
             norm_scale = 1
             try:
-                encoder_hidden_states_with_comp = torch.cat((hidden_states, ref_feat * norm_scale), dim=1)
+                encoder_hidden_states_with_comp = torch.cat((hidden_states, sub_feat * norm_scale), dim=1)
             except:
                 breakpoint()
         else:
@@ -623,6 +605,12 @@ class AttnProcessor2_0_Adapter:
         key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
         value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
+        if training_attn_mask is not None:
+            training_attn_mask = training_attn_mask.unsqueeze(1)
+            training_attn_mask = F.interpolate(training_attn_mask.float(), size=(query.shape[2], key.shape[2]), mode='nearest')
+            training_attn_mask = training_attn_mask.squeeze(1)
+            training_attn_mask = training_attn_mask[:, None, :, :].repeat(1, attn.heads, 1, 1)
+        
         # # the output of sdp = (batch, num_heads, seq_len, head_dim)
         # # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
@@ -652,4 +640,4 @@ class AttnProcessor2_0_Adapter:
 
         hidden_states = hidden_states / attn.rescale_output_factor
 
-        return hidden_states, reference_feats
+        return hidden_states, subject_feats

@@ -335,8 +335,8 @@ class BasicTransformerBlock_ref(nn.Module):
         cross_attention_kwargs = cross_attention_kwargs.copy() if cross_attention_kwargs is not None else {}
         gligen_kwargs = cross_attention_kwargs.pop("gligen", None)
 
-        if args.ref_feat_position == "before_sa":
-            ref_feature = copy.copy(norm_hidden_states)
+        if args.sub_feat_position == "before_sa":
+            sub_feature = copy.copy(norm_hidden_states)
         
         attn_output = self.attn1(
             norm_hidden_states,
@@ -358,8 +358,8 @@ class BasicTransformerBlock_ref(nn.Module):
         if gligen_kwargs is not None:
             hidden_states = self.fuser(hidden_states, gligen_kwargs["objs"])
 
-        if args.ref_feat_position == "after_sa":
-            ref_feature = copy.copy(hidden_states) # get results from self attn
+        if args.sub_feat_position == "after_sa":
+            sub_feature = copy.copy(hidden_states) # get results from self attn
         
         
         
@@ -391,8 +391,8 @@ class BasicTransformerBlock_ref(nn.Module):
                 )
             hidden_states = attn_output + hidden_states
             
-            if args.ref_feat_position == "after_ca":
-                ref_feature = copy.copy(hidden_states)
+            if args.sub_feat_position == "after_ca":
+                sub_feature = copy.copy(hidden_states)
         # 4. Feed-forward
         # i2vgen doesn't have this norm 🤷‍♂️
         if self.norm_type == "ada_norm_continuous":
@@ -424,10 +424,10 @@ class BasicTransformerBlock_ref(nn.Module):
         if hidden_states.ndim == 4:
             hidden_states = hidden_states.squeeze(1)
 
-        if args.ref_feat_position == "after_ff":
-            ref_feature = copy.copy(hidden_states)
+        if args.sub_feat_position == "after_ff":
+            sub_feature = copy.copy(hidden_states)
         
-        return hidden_states, ref_feature
+        return hidden_states, sub_feature
 
 
 @maybe_allow_in_graph
