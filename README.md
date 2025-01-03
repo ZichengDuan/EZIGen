@@ -68,7 +68,7 @@ Download the checkpoint(`checkpoint-200000.zip`) from [Google Drive](https://dri
 
 
 Please first turn to `config/infer_config.yaml` to assign a correct checkpoint folder path (e.g. `checkpoint-200000/`).
-## Persoanlized image generation
+## Personalized image generation
 The script for subject-driven generation and human content generation is provided in `infer_generation.sh`:
 ```
 # infer_generation.sh
@@ -94,7 +94,7 @@ Some explanations for the arguments:
 
 Some subjects are presented in `example_images/subjects`.
 
-## Persoanlized image editing
+## Personalized image editing
 ```
 # infer_editing.sh
 python infer.py \
@@ -114,16 +114,14 @@ python infer.py \
     # --num_interations 6
 ```
 Some explanations for the arguments:
-1. Similar to `--subject_prompt`, `--target_prompt` is also a placeholder now as the editing process doesn't require text prompt.
+1. `source_image_path`: the path to the source RGB image for editing.
 
-2. `source_image_path`: the path to the source RGB image for editing.
-
-3. `foreground_mask_path`: the path to a 3-channel mask with foreground as (255, 255, 255) and background as (0, 0, 0), indicating the source image area for editing, should be the same height and width as the source image.
+2. `foreground_mask_path`: the path to a 3-channel mask with foreground as (255, 255, 255) and background as (0, 0, 0), indicating the source image area for editing, should be the same height and width as the source image.
 
 Some input examples are presented in `example_images/source_images_with_masks`.
 
 ## Integration with off-the-shelf image generators
-The user can simply takes a generated image from any off-the-shelf image generator and edtis it with `infer_edit.sh`, examplary results from FLUX are shown below:
+The user can simply take a generated image from any off-the-shelf image generator and edit it with `infer_edit.sh`, example results from FLUX are shown below:
 ![dataset](misc/integration_flux.jpg)
 
 
@@ -139,11 +137,11 @@ Download COCO2014 dataset (train/val splits) following this link: https://cocoda
 Extract the data to local folders and configure the corresponding path in `configs/train_config.yaml`
 
 ## Start training
-After dataset preperation, you can then simply start DDP training with HuggingFace Accelerator:
+After dataset preparation, you can then simply start DDP training with HuggingFace Accelerator:
 ```
 sh train.sh
 ```
-Alternatively, you can also run the training using plain python on single-gpu:
+Alternatively, you can also run the training using plain python on a single GPU:
 ```
 python train.py --config configs/train_config.yaml
 ```
