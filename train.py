@@ -54,7 +54,7 @@ from accelerate.state import AcceleratorState
 from accelerate.logging import get_logger
 from accelerate import Accelerator
 
-from mydatasets import DatasetCOCOCap_unet
+from mydatasets import DatasetCOCO
 from mydatasets.datasets_anydoor import YoutubeVISDataset_unet
 
 from models.inversion_models import InversePipelinePartial, ExceptionCLIPTextModel, partial_inverse
@@ -232,7 +232,7 @@ def iteration_wrapper(args, accelerator, batch_img_path, main_unet, reference_un
             subject_prompt = batch_subject_prompt,
             args=args,
             latents=None,
-            negative_prompt="dark, blur, dizzy, black"
+            negative_prompt="dark, blur, dizzy, black", 
             latents_steps=0 if args.initial_loop else None,
             guidance_scale=10
         )
@@ -607,7 +607,7 @@ def main(config_path=None, config_file=None):
     
     dataset_to_train =[]
     if args.with_coco:
-        coco2014_dataset = DatasetCOCOCap_unet(args.coco2014["data_path"], transform=train_transforms, max_len=args.num_sub_img, tokenizer=tokenizer, train_split=args.coco2014["train_split"], args=args, subset_size=args.coco2014['subset_size'])
+        coco2014_dataset = DatasetCOCO(args.coco2014["data_path"], transform=train_transforms, max_len=args.num_sub_img, tokenizer=tokenizer, train_split=args.coco2014["train_split"], args=args, subset_size=args.coco2014['subset_size'])
         dataset_to_train.append(coco2014_dataset)
         
     if args.with_youtube_vis:
@@ -784,14 +784,11 @@ def main(config_path=None, config_file=None):
             if subject_noise.shape[0] != subject_images.shape[0]:
                 subject_noise = subject_noise.repeat(subject_images.shape[0], 1, 1, 1)
             
-            breakpoint()
-            
             # preprocess subject related features
             subject_latents = vae.encode(subject_images.to(weight_dtype)).latent_dist.sample()
             subject_latents = subject_latents * vae.config.scaling_factor
             noisy_subject_latents = noise_scheduler.add_noise(subject_latents, subject_noise, subject_timestep) # add [t=1]s to the latent
             subject_encoder_hidden_states = text_encoder(subject_input_ids, return_dict=False)[0]
-            breakpoint()
             # obtain subject features from reference UNet for later usage
             _, subject_features = reference_unet(noisy_subject_latents, subject_timestep, subject_encoder_hidden_states, return_dict=False, args=args) 
             subject_features = [block_feat.reshape(args.train_batch_size,-1,block_feat.shape[-1]) for block_feat in subject_features] # bsz ,sub_image_patches (later concat to k and v), dim 
@@ -802,7 +799,6 @@ def main(config_path=None, config_file=None):
                 subject_features = [torch.zeros_like(subject_features[i]).to(weight_dtype) for i in range(16)]
                 padding_nums = torch.tensor([args.num_sub_img] * args.train_batch_size)
             
-            breakpoint()
             # preprocess target related features
             target_latents = vae.encode(target_image).latent_dist.sample() # [bsz, 4, 64, 64]
             target_latents = target_latents * vae.config.scaling_factor

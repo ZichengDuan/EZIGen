@@ -58,7 +58,7 @@ def resize_bboxes(bboxes, orig_size, target_size):
     return resized_bboxes
 
 
-class DatasetCOCOCap_unet(Dataset):
+class DatasetCOCO(Dataset):
     def __init__(self, data_paths, transform=None, max_len=4, tokenizer=None, train_split='val', args=None, subset_size=None):
         """_summary_
         Args:
@@ -202,7 +202,7 @@ class DatasetCOCOCap_unet(Dataset):
         decoded_masks = []
         H, W, C = image.shape
         
-        bboxes = resize_bboxes(bboxes, (h, w), (self.args.resolution, self.argsresolution))
+        bboxes = resize_bboxes(bboxes, (h, w), (self.args.resolution, self.args.resolution))
         for seg, cate, area, bbox in zip(rle_masks, categories, areas, bboxes):
             if ((len(areas) > self.max_len) and (area not in sorted(areas)[-int(len(areas)//2):]) or (area < 1000)):
                 continue
@@ -217,7 +217,7 @@ class DatasetCOCOCap_unet(Dataset):
             white_image[decoded_mask == 0] = np.array([255, 255, 255])
             white_image = cv2.resize(white_image, (self.args.resolution, self.args.resolution))
             masked_sub = white_image[bbox_y:bbox_y + bbox_h, bbox_x:bbox_x + bbox_w, :]
-                masked_sub = pad_to_square(masked_sub)
+            masked_sub = pad_to_square(masked_sub)
                 
             if np.sum(masked_sub) != 0:
                 sub_imgs.append(masked_sub)
@@ -327,7 +327,7 @@ if __name__ == "__main__":
     
     tokenizer = CLIPTokenizer.from_pretrained("stabilityai/stable-diffusion-2-1-base", subfolder="tokenizer", local_files_only=True)
     
-    coco_data = DatasetCOCOCap_unet("data/coco2014", transform=transform, tokenizer=tokenizer)
+    coco_data = DatasetCOCO("data/coco2014", transform=transform, tokenizer=tokenizer)
     # coco_data.load_data()
     
     coco_data[10]
