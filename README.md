@@ -156,6 +156,7 @@ In default setting, with 200k samples, the training takes about 4 hours on 8 A10
 - [x] Demo pages
 - [x] Inference code and checkpoint
 - [x] Training code
+- [ ] SDXL support!
 
 # Acknowledgements
 Thanks [AnyDoor](https://github.com/ali-vilab/AnyDoor) for providing the YoutubeVIS dataset scripts, shout out to this great work!
