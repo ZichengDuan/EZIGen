@@ -35,6 +35,7 @@ Zero-shot personalized image generation models aim to produce images that align 
 - [x] Inference code and checkpoint
 - [x] Training code
 - [ ] SDXL support!
+- [ ] Flux support!!
 
 # Installation
 Clone this repo
