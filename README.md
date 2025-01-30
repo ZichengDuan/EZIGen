@@ -30,6 +30,12 @@ Zero-shot personalized image generation models aim to produce images that align 
 # Overall Structure
 ![dataset](misc/main4.jpg)
 
+# TODO List
+- [x] Demo pages
+- [x] Inference code and checkpoint
+- [x] Training code
+- [ ] SDXL support!
+
 # Installation
 Clone this repo
 ```
@@ -47,7 +53,7 @@ Install PyTorch
 pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 --index-url https://download.pytorch.org/whl/cu118
 ```
 
-Build Diffusers from source
+Build Diffusers from the source
 ```
 wget https://github.com/huggingface/diffusers/archive/refs/tags/v0.30.1.zip
 cd diffusers-0.30.1
@@ -127,7 +133,7 @@ The user can simply take a generated image from any off-the-shelf image generato
 
 
 # Training
-You can also start you own training following the instructions below: 
+You can also start your own training following the instructions below: 
 
 ## Prepare training datasets
 Download YoutubeVIS2019 dataset (training split) following this link: https://competitions.codalab.org/competitions/20128#participate-get_data
@@ -148,15 +154,7 @@ python train.py --config configs/train_config.yaml
 The checkpoint folders (e.g. checkpoint-5000) and tensorboard log will be automatically saved to the `output_dir`, which in turn can be used to do the inference. 
 
 # Training details
-In default setting, with 200k samples, the training takes about 4 hours on 8 A100-40G GPUs, and 26 hours on 1 A100-40G GPU, with batch size equals to 1 on each device. The provided checkpoint is trained on a single GPU, thus having a checkpoint post fix '200000', while if trained on multiple devices, the checkpointing post fix would be `num_samples / num_GPUs`.
-
-
-
-# TODO List
-- [x] Demo pages
-- [x] Inference code and checkpoint
-- [x] Training code
-- [ ] SDXL support!
+In the default setting, with 200k samples, the training takes about 4 hours on 8 A100-40G GPUs, and 26 hours on 1 A100-40G GPU, with a batch size equal to 1 on each device. The provided checkpoint is trained on a single GPU, thus having a checkpoint postfix '200000', while if trained on multiple devices, the checkpointing postfix would be `num_samples / num_GPUs`.
 
 # Acknowledgements
 Thanks [AnyDoor](https://github.com/ali-vilab/AnyDoor) for providing the YoutubeVIS dataset scripts, shout out to this great work!
