@@ -193,9 +193,9 @@ class BaseDataset_unet(Dataset):
         
         H2, W2 = collage.shape[0], collage.shape[1]
         # resize everything
-        cropped_target_image = cv2.resize(cropped_target_image.astype(np.uint8), (512,512)).astype(np.float32)
-        collage = cv2.resize(collage.astype(np.uint8), (512,512)).astype(np.float32)
-        collage_mask  = cv2.resize(collage_mask.astype(np.uint8), (512,512),  interpolation = cv2.INTER_NEAREST).astype(np.float32)
+        cropped_target_image = cv2.resize(cropped_target_image.astype(np.uint8), (args.resolution,args.resolution)).astype(np.float32)
+        collage = cv2.resize(collage.astype(np.uint8), (args.resolution,args.resolution)).astype(np.float32)
+        collage_mask  = cv2.resize(collage_mask.astype(np.uint8), (args.resolution,args.resolution),  interpolation = cv2.INTER_NEAREST).astype(np.float32)
         cropped_tar_mask  = cv2.resize(cropped_tar_mask[:, :, 0].astype(np.uint8), (64,64),  interpolation = cv2.INTER_NEAREST).astype(np.uint8)
         
         collage_mask[collage_mask == 2] = -1
@@ -212,7 +212,7 @@ class BaseDataset_unet(Dataset):
             cropped_tar_mask = [expand_mask(np.array(cropped_tar_mask) * 255, max_distance=0, foreground_value=255)]
             
         else:
-            if sub_size == 512:
+            if sub_size == args.resolution:
                 masked_sub_image_aug = torch.tensor(masked_sub_image_aug  / 127.5 - 1.0)
             elif sub_size == 224:
                 masked_sub_image_aug = torch.tensor(masked_sub_image_aug  / 255)

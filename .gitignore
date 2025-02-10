@@ -27,3 +27,5 @@ env/
 build/
 dist/
 *.egg-info/
+
+outputs/

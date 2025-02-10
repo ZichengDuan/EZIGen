@@ -337,7 +337,6 @@ class BasicTransformerBlock_ref(nn.Module):
 
         if args.sub_feat_position == "before_sa":
             sub_feature = copy.copy(norm_hidden_states)
-        
         attn_output = self.attn1(
             norm_hidden_states,
             encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,

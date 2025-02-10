@@ -1022,7 +1022,6 @@ class UNet2DConditionModel_main(ModelMixin, ConfigMixin, UNet2DConditionLoadersM
         # However, the upsampling interpolation output size can be forced to fit any upsampling size
         # on the fly if necessary.
         default_overall_up_factor = 2**self.num_upsamplers
-
         # upsample size should be forwarded when sample is not a multiple of `default_overall_up_factor`
         forward_upsample_size = False
         upsample_size = None
@@ -1120,11 +1119,11 @@ class UNet2DConditionModel_main(ModelMixin, ConfigMixin, UNet2DConditionLoadersM
             )
             down_intrablock_additional_residuals = down_block_additional_residuals
             is_adapter = True
+        
         # ========================================================================================
         if hasattr(self, "learnable_weights") and subject_feats is not None:
             subject_feats = [subject_feat * learnable_param for (subject_feat, learnable_param) in zip(subject_feats, self.learnable_weights)]
-        # # ========================================================================================
-        
+        # ========================================================================================
         down_block_res_samples = (sample,)
         feat_count = 0
         

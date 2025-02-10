@@ -39,7 +39,7 @@ class Transformer2DModelOutput(BaseOutput):
     """
 
     sample: torch.FloatTensor
-    self_attn_res: torch.FloatTensor
+    self_attn_res: list
 
 
 class Transformer2DModel_ref(ModelMixin, ConfigMixin):
@@ -366,7 +366,8 @@ class Transformer2DModel_ref(ModelMixin, ConfigMixin):
             batch_size = hidden_states.shape[0]
             encoder_hidden_states = self.caption_projection(encoder_hidden_states)
             encoder_hidden_states = encoder_hidden_states.view(batch_size, -1, hidden_states.shape[-1])
-
+            
+        self_attn_res_all = []
         for block in self.transformer_blocks:
             if self.training and self.gradient_checkpointing:
 
@@ -402,6 +403,7 @@ class Transformer2DModel_ref(ModelMixin, ConfigMixin):
                     class_labels=class_labels,
                     args=args,
                 )
+                self_attn_res_all.append(self_attn_res)
 
         # 3. Output
         if self.is_input_continuous:
@@ -458,6 +460,6 @@ class Transformer2DModel_ref(ModelMixin, ConfigMixin):
             )
 
         if not return_dict:
-            return (output, self_attn_res)
+            return (output, self_attn_res_all)
 
-        return Transformer2DModelOutput(sample=output, self_attn_res=self_attn_res)
+        return Transformer2DModelOutput(sample=output, self_attn_res=self_attn_res_all)

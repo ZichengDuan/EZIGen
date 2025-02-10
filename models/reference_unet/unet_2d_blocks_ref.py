@@ -660,7 +660,7 @@ class UNetMidBlock2DCrossAttn_ref(nn.Module):
                     args=args,
                 )
                 hidden_states = resnet(hidden_states, temb, scale=lora_scale)
-                self_attn_results.append(self_attn_res)
+                self_attn_results.extend(self_attn_res)
         return hidden_states, self_attn_results
 
 
@@ -1058,7 +1058,7 @@ class CrossAttnDownBlock2D_ref(nn.Module):
                     return_dict=False,
                      args=args,
                 )
-                self_attn_results.append(self_attn_res)
+                self_attn_results.extend(self_attn_res)
 
             # apply additional residuals to the output of the last pair of resnet and attention blocks
             if i == len(blocks) - 1 and additional_residuals is not None:
@@ -2286,7 +2286,7 @@ class CrossAttnUpBlock2D_ref(nn.Module):
                     return_dict=False,
                     args=args,
                 )
-                self_attn_results.append(self_attn_res)
+                self_attn_results.extend(self_attn_res)
 
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:

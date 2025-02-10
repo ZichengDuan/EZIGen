@@ -807,7 +807,7 @@ def add_noise_to_image(noise_step, args, img: PIL.Image, vae, train_transforms, 
     
     # breakpoint()
     # generator.manual_seed(args.seed)
-    latents = vae.encode(img.to(torch.float32)).latent_dist.sample()
+    latents = vae.encode(img.to(vae.dtype)).latent_dist.sample()
     latents = latents * vae.config.scaling_factor
                     
     # Get the text embedding for conditioning
@@ -821,7 +821,7 @@ def add_noise_to_image(noise_step, args, img: PIL.Image, vae, train_transforms, 
     timesteps = timestep
     timesteps = timesteps.long() 
     # generator.manual_seed(args.seed)
-    noisy_latents = noise_scheduler.add_noise(latents, noise, torch.tensor([timesteps]))
+    noisy_latents = noise_scheduler.add_noise(latents, noise, torch.tensor([[timesteps]]))
     
     del latents, img, noise
     torch.cuda.empty_cache()
@@ -1216,6 +1216,60 @@ def extract_subject_features(args, image_paths, reference_unet, text_encoder, to
     _, subject_features = reference_unet(noisy_comp_latents, subject_denoise_timestep, subject_encoder_hidden_states, return_dict=False, args=args)
     subject_features = [block_feat.reshape(1, -1, block_feat.shape[-1]) if block_feat is not None else None for block_feat in subject_features] # B, sub_image_patches, dim 
     
+    
+    return subject_features
+
+
+def extract_subject_features_sdxl(args, image_paths, reference_unet, text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, vae, noise_scheduler, subject_noise, weight_dtype, transforms, text="", device="cuda:0", subject_denoise_timestep = None, generator=None):
+
+    references = []
+    # image_paths to references
+    if type(image_paths) == str:
+        image_paths = [image_paths]
+    
+    for i, img_path in enumerate(image_paths):
+        img = Image.open(img_path).convert('RGB')
+        img = transforms(img)
+        references.append(img)
+    
+    references = torch.stack(references)
+    try:
+        inputs_one = tokenizer_one(text, max_length=tokenizer_one.model_max_length, padding="max_length", truncation=True, return_tensors="pt")['input_ids']
+        inputs_two = tokenizer_two(text, max_length=tokenizer_two.model_max_length, padding="max_length", truncation=True, return_tensors="pt")['input_ids']
+    except:
+        breakpoint()
+        
+    inputs_one = inputs_one[:, None, :]
+    inputs_two = inputs_two[:, None, :]
+    
+    subject_encoder_hidden_states = text_encoder_one(inputs_one.to(reference_unet.device), return_dict=False)[0]
+    subject_pooled_prompt_embeds, subject_encoder_hidden_states_two = text_encoder_two(inputs_two.to(reference_unet.device), return_dict=False)
+    subject_encoder_hidden_states = torch.cat((subject_encoder_hidden_states, subject_encoder_hidden_states_two), dim=-1)
+    subject_pooled_prompt_embeds = subject_pooled_prompt_embeds.view(subject_pooled_prompt_embeds.shape[0], -1)
+    def compute_time_ids(original_size, crops_coords_top_left):
+                # Adapted from pipeline.StableDiffusionXLPipeline._get_add_time_ids
+                target_size = (args.resolution, args.resolution)
+                add_time_ids = list(original_size + crops_coords_top_left + target_size)
+                add_time_ids = torch.tensor([add_time_ids], device=subject_encoder_hidden_states_two.device, dtype=subject_encoder_hidden_states_two.dtype)
+                return add_time_ids
+    subject_add_time_ids = torch.cat([compute_time_ids(s, c) for s, c in zip([(1024, 1024) for i in range(subject_pooled_prompt_embeds.shape[0])], [(0, 0) for i in range(subject_pooled_prompt_embeds.shape[0])])])
+    
+    reference_unet_unet_added_conditions = {"time_ids": subject_add_time_ids}
+    reference_unet_unet_added_conditions.update({"text_embeds": subject_pooled_prompt_embeds})
+    
+    subject_denoise_timestep = torch.tensor(subject_denoise_timestep, device=reference_unet.device).repeat(references.shape[0])
+    subject_denoise_timestep = subject_denoise_timestep.long()
+    # prepare references from unet, convert images to latent space
+
+    comp_latents = vae.encode(references.to(weight_dtype).to(reference_unet.device)).latent_dist.sample()
+    comp_latents = comp_latents * vae.config.scaling_factor
+    
+    subject_noise = torch.randn_like(comp_latents[:1, :, :, :]) # tensor(115.0338, device='cuda:0')
+
+    noisy_comp_latents = noise_scheduler.add_noise(comp_latents, subject_noise, subject_denoise_timestep) # tensor(868.9863, device='cuda:0')
+    # subject_features: [Block1 features for 10 ref img, Block2, ...,Block16]
+    ref_sample, subject_features = reference_unet(noisy_comp_latents, subject_denoise_timestep, subject_encoder_hidden_states, added_cond_kwargs=reference_unet_unet_added_conditions, return_dict=False, args=args)
+    subject_features = [block_feat.reshape(1, -1, block_feat.shape[-1]) if block_feat is not None else None for block_feat in subject_features] # B, sub_image_patches, dim 
     
     return subject_features
 

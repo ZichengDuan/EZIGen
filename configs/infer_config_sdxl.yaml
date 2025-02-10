@@ -1,11 +1,11 @@
 # checkpoint name
-pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
-checkpoint_path: experiments/ezigen_opensource/best_2/checkpoint-200000 # e.g. checkpoint-200000
-clip_path: /home/a1901664/.cache/clip//ViT-B-32.pt # or simply "ViT-B/32" and let transformers module do its job
+pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
+checkpoint_path: experiments/sdxl_with_subject200k_and_more_coco_and_jigsaw/checkpoint-50000 # e.g. checkpoint-200000
+clip_path: /home/a1901664/.cache/clip/ViT-B-32.pt # or simply "ViT-B/32" and let transformers module do its job
 
 # system defaults, !no need to change anything here!
 local_rank: 0 # we only do inference on a single GPU
-resolution: 512
+resolution: 1024
 subject_denoise_timestep: 1
 add_before_ca: true
 sub_feat_position: "before_sa"

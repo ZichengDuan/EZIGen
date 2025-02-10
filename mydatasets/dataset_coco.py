@@ -59,7 +59,7 @@ def resize_bboxes(bboxes, orig_size, target_size):
 
 
 class DatasetCOCO(Dataset):
-    def __init__(self, data_paths, transform=None, max_len=4, tokenizer=None, train_split='val', args=None, subset_size=None):
+    def __init__(self, data_paths, transform=None, max_len=4, tokenizer_one=None, tokenizer_two=None, train_split='val', args=None, subset_size=None):
         """_summary_
         Args:
             data_paths (_type_): _description_
@@ -85,7 +85,8 @@ class DatasetCOCO(Dataset):
         self.transform = transform
         self.max_len = max_len
         self.data = self.load_data()
-        self.tokenizer = tokenizer
+        self.tokenizer_one = tokenizer_one
+        self.tokenizer_two = tokenizer_two
         self.args = args
         self.subset_size = subset_size
         
@@ -188,10 +189,21 @@ class DatasetCOCO(Dataset):
     
     
     def tokenize_text(self, text):
-        inputs = self.tokenizer(
-            text, max_length=self.tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+        inputs_one = self.tokenizer_one(
+            text, max_length=self.tokenizer_one.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
         )
-        return inputs.input_ids
+        one_ids = inputs_one.input_ids
+        
+        if self.tokenizer_two:
+            inputs_two = self.tokenizer_two(
+                text, max_length=self.tokenizer_two.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+            )
+            two_ids = inputs_two.input_ids
+        else:
+            two_ids = None
+        
+        
+        return one_ids, two_ids
     
     
     
@@ -282,7 +294,6 @@ class DatasetCOCO(Dataset):
                 subject_prompts = ["" for i in range(self.max_len)]
         pil_sub_images = [Image.fromarray(np.uint8(sub)) for sub in sub_images]
         sub_imgs = torch.stack(sub_imgs)
-        
         # prepare suberence mask
         try:
             for i in range(len(decoded_masks)):
@@ -291,15 +302,16 @@ class DatasetCOCO(Dataset):
                 decoded_masks[i] = cur_mask
         except:
             breakpoint()
-        
-        text_ids = self.tokenize_text(caption)
-        sub_text_ids = self.tokenize_text(subject_prompts)
+        one_ids, two_ids = self.tokenize_text(caption)
+        sub_one_ids, sub_two_ids = self.tokenize_text(subject_prompts)
         
         # return sample
         sample = {
             "target_image": target,
-            "input_ids": text_ids,
-            "subject_input_ids": sub_text_ids,
+            "input_ids": one_ids,
+            "input_ids_two": two_ids,
+            "subject_input_ids": sub_one_ids,
+            "subject_input_ids_two": sub_two_ids,
             "subject_images": sub_imgs,
             "sub_masks": decoded_masks,
             "padding_num": padding_num,
@@ -309,7 +321,6 @@ class DatasetCOCO(Dataset):
             "target_prompt": caption,
             "pil_sub_images": pil_sub_images,
         }
-        
         return sample
 
 

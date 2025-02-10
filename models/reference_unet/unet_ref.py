@@ -1232,7 +1232,7 @@ class UNet2DConditionModel_ref(ModelMixin, ConfigMixin, UNet2DConditionLoadersMi
                     **additional_residuals,
                 )
                 subject_features.extend(self_attn_results)
-                
+                # breakpoint()
             else:
                 sample, res_samples = downsample_block(hidden_states=sample, temb=emb, scale=lora_scale)
                 if is_adapter and len(down_intrablock_additional_residuals) > 0:
@@ -1265,7 +1265,6 @@ class UNet2DConditionModel_ref(ModelMixin, ConfigMixin, UNet2DConditionLoadersMi
                 )
                 subject_features.extend(self_attn_results)
                 
-                
             else:
                 sample = self.mid_block(sample, emb)
             # To support T2I-Adapter-XL
@@ -1290,7 +1289,6 @@ class UNet2DConditionModel_ref(ModelMixin, ConfigMixin, UNet2DConditionLoadersMi
             # upsample size, we do it here
             if not is_final_block and forward_upsample_size:
                 upsample_size = down_block_res_samples[-1].shape[2:]
-
             if hasattr(upsample_block, "has_cross_attention") and upsample_block.has_cross_attention:
                 sample, self_attn_results = upsample_block(
                     hidden_states=sample,
@@ -1304,7 +1302,6 @@ class UNet2DConditionModel_ref(ModelMixin, ConfigMixin, UNet2DConditionLoadersMi
                     args=args,
                 )
                 subject_features.extend(self_attn_results)
-                
             else:
                 sample = upsample_block(
                     hidden_states=sample,

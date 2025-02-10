@@ -265,6 +265,7 @@ class BasicTransformerBlock_main(nn.Module):
         args = None,
         training_attn_mask = None,
     ) -> torch.FloatTensor:
+        
         if inf_timestep == None:
             inf_timestep = 10000 # an aritrary big number
         
@@ -318,8 +319,10 @@ class BasicTransformerBlock_main(nn.Module):
             self_hidden_states = self_hidden_states.squeeze(1)
         
         # breakpoint()
-        # TODO: self attn 1.5   
-        if self.adapter_norm and self.adapter and self.args.add_before_ca and self.args.skip_adapter_ratio * self.args.infer_steps < inf_timestep + 1:
+        # if hidden_states.shape[0] > 1:
+        #     breakpoint()
+        # TODO: self attn 1.5
+        if hasattr(self, "adapter_norm") and hasattr(self, "adapter") and self.args.add_before_ca and self.args.skip_adapter_ratio * self.args.infer_steps < inf_timestep + 1:
             hidden_states = self_hidden_states # tensor(12675.0488, device='cuda:0')， tensor(-27927.3320, device='cuda:0')
             
             if self.norm_type == "ada_norm":
@@ -403,7 +406,7 @@ class BasicTransformerBlock_main(nn.Module):
 
         # breakpoint()
         # if add after ca
-        if self.adapter_norm and self.adapter and not self.args.add_before_ca and (self.args.skip_adapter_ratio * self.args.infer_steps < inf_timestep + 1):
+        if hasattr(self, "adapter_norm") and hasattr(self, "adapter") and not self.args.add_before_ca and (self.args.skip_adapter_ratio * self.args.infer_steps < inf_timestep + 1):
                 hidden_states = cross_hidden_states
                 if self.norm_type == "ada_norm":
                     norm_hidden_states = self.adapter_norm(hidden_states, timestep)

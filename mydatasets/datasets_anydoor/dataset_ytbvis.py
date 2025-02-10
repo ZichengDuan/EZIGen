@@ -48,7 +48,7 @@ prompt_templates = [
 
 
 class YoutubeVISDataset_unet(BaseDataset_unet):
-    def __init__(self, image_dir, anno, meta, tokenizer, sub_size, transforms, ytbvis_subset_size=40000, args = None):
+    def __init__(self, image_dir, anno, meta, sub_size, transforms, ytbvis_subset_size=40000, args = None, tokenizer_one=None, tokenizer_two=None):
         self.image_root = image_dir
         self.anno_root = anno 
         self.meta_file = meta
@@ -62,11 +62,12 @@ class YoutubeVISDataset_unet(BaseDataset_unet):
 
         self.records = records
         self.data = video_dirs
-        self.size = (512,512)
+        self.size = (args.resolution,args.resolution)
         self.clip_size = (224,224)
         self.dynamic = 1
         self.sub_size=sub_size
-        self.tokenizer = tokenizer
+        self.tokenizer_one = tokenizer_one
+        self.tokenizer_two = tokenizer_two
         self.ytbvis_subset_size=ytbvis_subset_size
         self.transforms = transforms
         self.args = args
@@ -92,10 +93,20 @@ class YoutubeVISDataset_unet(BaseDataset_unet):
         return pass_flag
 
     def tokenize_text(self, text):
-        inputs = self.tokenizer(
-            text, max_length=self.tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+        inputs_one = self.tokenizer_one(
+            text, max_length=self.tokenizer_one.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
         )
-        return inputs.input_ids
+        one_ids = inputs_one.input_ids
+        
+        if self.tokenizer_two:
+            inputs_two = self.tokenizer_two(
+                text, max_length=self.tokenizer_two.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+            )
+            two_ids = inputs_two.input_ids
+        else:
+            two_ids = None
+        
+        return one_ids, two_ids
     
     def get_sample(self, idx):
         video_id = list(self.records.keys())[idx]
@@ -137,8 +148,8 @@ class YoutubeVISDataset_unet(BaseDataset_unet):
         item_with_collage = self.process_pairs(sub_image, sub_mask, tar_image, tar_mask, sub_size=self.sub_size, transforms=self.transforms, args = self.args)
         sampled_time_steps = self.sample_timestep()
         item_with_collage['time_steps'] = sampled_time_steps
-        item_with_collage['input_ids'] = self.tokenize_text(target_prompt)
-        item_with_collage['subject_input_ids'] = self.tokenize_text(subject_prompt)
+        item_with_collage['input_ids'], item_with_collage['input_ids_two'] = self.tokenize_text(target_prompt)
+        item_with_collage['subject_input_ids'], item_with_collage['subject_input_ids_two'] = self.tokenize_text(subject_prompt)
         item_with_collage['dataset_name'] = "youtubeVIS"
         item_with_collage['target_prompt'] = target_prompt
         item_with_collage['subject_prompt'] = subject_prompt

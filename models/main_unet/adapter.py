@@ -557,7 +557,6 @@ class AttnProcessor2_0_Adapter:
         inf_timestep=None,
         training_attn_mask = None,
     ) -> torch.FloatTensor:
-        
         if subject_feats:
             sub_feat = subject_feats.pop(0)
         else:
@@ -592,7 +591,6 @@ class AttnProcessor2_0_Adapter:
                 breakpoint()
         else:
             encoder_hidden_states_with_comp = hidden_states
-        
         
         key = attn.to_k(encoder_hidden_states_with_comp, *args) # 4096 + 640
         value = attn.to_v(encoder_hidden_states_with_comp, *args)
