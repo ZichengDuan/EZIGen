@@ -1,0 +1,8 @@
+{
+  "editor.autoSave": "afterDelay",
+  "editor.fontSize": 16,
+  "codeRewrite.enabled": false,
+  "aoneCopilot.smartInsert.enabled": false,
+  "aoneCopilot.quickFix.enabled": false,
+  "debugpy.debugJustMyCode": false
+}

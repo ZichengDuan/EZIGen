@@ -10,6 +10,9 @@ Pillow
 PyYAML
 scipy
 tqdm
-transformers==4.37.2
-xformers==0.0.22
-git+https://github.com/openai/CLIP.git
+transformers
+tqdm
+wandb
+torchmetrics
+ftfy
+regex

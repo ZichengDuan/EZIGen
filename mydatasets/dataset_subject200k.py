@@ -10,11 +10,12 @@ import json
 
 
 class Subject200k_dataset(Dataset):
-    def __init__(self, data_paths, transform=None, max_len=4, tokenizer_one=None, tokenizer_two=None, args=None, subset_size=None):
+    def __init__(self, data_paths=None, parquet_paths=None, transform=None, max_len=4, tokenizer_one=None, tokenizer_two=None, args=None, subset_size=None):
         self.data_paths = data_paths
+        self.parquet_paths = parquet_paths
         self.transform = transform
-        # self.df = self._load_parquet_files()
-        self.data_pairs = self._load_image_pairs()
+        self.df = self._load_parquet_files()
+        # self.data_pairs = self._load_image_pairs()
         self.args = args
         self.max_len = max_len
         self.tokenizer_one = tokenizer_one
@@ -38,10 +39,10 @@ class Subject200k_dataset(Dataset):
         return one_ids, two_ids
     
     def _load_parquet_files(self):
-        files = [os.path.join(self.data_paths, f) for f in os.listdir(self.data_paths) if f.endswith('.parquet')]
+        files = [os.path.join(self.parquet_paths, f) for f in os.listdir(self.parquet_paths) if f.endswith('.parquet')]
         df_list = []
         for i, f in enumerate(tqdm(files, desc="Loading Parquet Files")):
-            if i < 8:
+            if i > 1:
                 continue
             df_list.append(pd.read_parquet(f))
         
@@ -117,7 +118,7 @@ if __name__ == "__main__":
     )
     
     dataset = Subject200k_dataset(
-        data_paths="data/Subjects200K_collection3/extracted_pairs",
+        parquet_paths="/mnt/sh_nas/duanzicheng.dzc/Data/Subjects200K_collection3/data",
         transform=train_transforms,
         tokenizer_one=None,
         tokenizer_two=None

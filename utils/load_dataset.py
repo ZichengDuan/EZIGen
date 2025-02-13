@@ -21,7 +21,7 @@ import pandas as pd
 import glob
 
 # 获取所有 parquet 文件
-parquet_files = glob.glob("/hpcfs/users/a1901664/huggingface_cache/datasets/Subjects200K_collection3/data/train-*.parquet")
+parquet_files = glob.glob("/mnt/sh_nas/duanzicheng.dzc/Data/Subjects200K_collection3/data/train-*.parquet")
 
 # 读取所有文件并合并
 df = pd.concat([pd.read_parquet(f) for f in parquet_files], ignore_index=True)
