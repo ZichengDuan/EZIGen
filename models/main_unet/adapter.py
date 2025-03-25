@@ -588,7 +588,7 @@ class AttnProcessor2_0_Adapter:
             try:
                 encoder_hidden_states_with_comp = torch.cat((hidden_states, sub_feat * norm_scale), dim=1)
             except:
-                breakpoint()
+                encoder_hidden_states_with_comp = torch.cat((hidden_states, sub_feat[0].unsqueeze(0) * norm_scale), dim=1)
         else:
             encoder_hidden_states_with_comp = hidden_states
         
@@ -607,12 +607,11 @@ class AttnProcessor2_0_Adapter:
             training_attn_mask = training_attn_mask.unsqueeze(1)
             training_attn_mask = F.interpolate(training_attn_mask.float(), size=(query.shape[2], key.shape[2]), mode='nearest')
             training_attn_mask = training_attn_mask.squeeze(1)
-            training_attn_mask = training_attn_mask[:, None, :, :].repeat(1, attn.heads, 1, 1)
-        
+            training_attn_mask = training_attn_mask[:, None, :, :].repeat(1, attn.heads, 1, 1).to(query.dtype)
         # # the output of sdp = (batch, num_heads, seq_len, head_dim)
         # # TODO: add support for attn.scale when we move to Torch 2.1
         hidden_states = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+            query, key, value, attn_mask=training_attn_mask, dropout_p=0.0, is_causal=False
         )
         
         

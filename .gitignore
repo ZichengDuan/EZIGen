@@ -1,5 +1,6 @@
 experiments
 experiments/*
+prev_exp/*
 data
 data/*
 
@@ -29,3 +30,17 @@ dist/
 *.egg-info/
 
 outputs/
+output2_batched/
+output_batched2/
+output_dog_police_batched/
+output_omnini/
+rebuttal/
+outputs/
+img/
+hf_models/
+example_images/
+diffusers19/
+diffusers/
+misc/
+models/inversion_models/image_edit_sdxl/
+models/inversion_models/sdxl_inversions/

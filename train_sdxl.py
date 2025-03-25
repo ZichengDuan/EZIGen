@@ -12,9 +12,13 @@ import copy
 import safetensors
 import pickle
 import glob
+import signal
 import torch
 import copy
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import retrieve_timesteps
 import torch.nn as nn
+from datetime import timedelta
+from torch.cuda.amp import autocast, GradScaler
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch.utils.data import ConcatDataset, DataLoader
@@ -26,7 +30,6 @@ from packaging import version
 from tqdm.auto import tqdm
 from matplotlib import pyplot as plt
 from omegaconf import OmegaConf
-from numba import cuda
 import argparse
 import yaml
 from PIL import Image
@@ -38,7 +41,7 @@ from transformers import CLIPTextModel, CLIPTokenizer, CLIPProcessor, CLIPModel,
 from transformers.utils import logging as transformers_logging
 from transformers.utils import ContextManagers
 from transformers.utils import logging as hf_logging
-
+import wandb
 import diffusers
 from diffusers import (
     AutoencoderKL, DDPMScheduler, DDIMScheduler, StableDiffusionPipeline, UNet2DConditionModel, 
@@ -53,10 +56,10 @@ from diffusers.utils.torch_utils import is_compiled_module
 from accelerate.utils import ProjectConfiguration, set_seed
 from accelerate.state import AcceleratorState
 from accelerate.logging import get_logger
-from accelerate import Accelerator
+from accelerate import Accelerator, InitProcessGroupKwargs
 
-from mydatasets import DatasetCOCO, Subject200k_dataset, Subject200k_dataset_jigsaw
-from mydatasets.datasets_anydoor import YoutubeVISDataset_unet
+from mydatasets import DatasetCOCO_sdxl, Subject200k_dataset_sdxl, Subject200k_dataset_sdxl_jigsaw_sdxl
+from mydatasets.datasets_anydoor import YoutubeVISDataset_unet_sdxl, VitonHDDataset_unet
 
 from models.inversion_models import InversePipelinePartial, ExceptionCLIPTextModel, partial_inverse
 from models.main_unet.unet_main import UNet2DConditionModel_main
@@ -66,6 +69,8 @@ from models.pipelines.pipline_sd_main import StableDiffusionPipeline_main
 from models.pipelines.pipline_sdxl_main import StableDiffusionXLPipeline_main
 
 from utils import extract_subject_features, extract_subject_features_sdxl, add_noise_to_image, calculate_dino_similarity, compute_clip_similarity, resize_image_to_fit_short, random_based_on_time, find_subsequence, prepare_mean_masks_each_word, generate_attn_masks_for_each_block, fill_bounding_rect, expand_foreground_hard, expand_foreground_soft
+
+from accelerate.utils import DeepSpeedPlugin
 
 transformers_logging.set_verbosity_error()
 warnings.filterwarnings("ignore", category=FutureWarning, module="diffusers")
@@ -78,6 +83,8 @@ check_min_version("0.27.0.dev0")
 logger = get_logger(__name__, log_level="INFO")
 
 device = "cpu" if not torch.cuda.is_available() else "cuda"
+
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 # Function for unwrapping if model was compiled with `torch.compile`.
 def unwrap_model(model, accelerator):
@@ -257,7 +264,7 @@ batch_subject_prompt, batch_img_paths, batch_variation_num, clip_model, clip_pro
     pipeline.to(accelerator.device)
     pipeline.to(weight_dtype)
     vis_image_dict = {}
-            
+
     with torch.no_grad():
         for cur_val_example_id in range(num_val_example):
             print(f"[{cur_val_example_id + 1}/{num_val_example}]")
@@ -292,13 +299,22 @@ batch_subject_prompt, batch_img_paths, batch_variation_num, clip_model, clip_pro
             torch.cuda.empty_cache()
             
     for tracker in accelerator.trackers:
-        if tracker.name == "tensorboard":
-            for cur_val_example_id in range(num_val_example):
-                text_prompt, simple_image, pure_text_image, final_image  = vis_image_dict[cur_val_example_id]
-                np_images = np.stack([np.asarray(cv2.resize(np.array(img), (args.resolution, args.resolution))) for img in [pure_text_image, simple_image , final_image]])
-                tracker.writer.add_images(f"Subject: {{batch_subject_prompt[cur_val_example_id]}}. Target: {batch_text_prompts[cur_val_example_id]} [Vanilla SD2.1 base / Full injection / Generated image]", np_images, epoch, dataformats="NHWC")
-        else:
-            logger.warn(f"image logging not implemented for {tracker.name}")
+        for cur_val_example_id in range(num_val_example):
+            text_prompt, simple_image, pure_text_image, final_image  = vis_image_dict[cur_val_example_id]
+            np_images = np.stack([np.asarray(cv2.resize(np.array(img), (args.resolution, args.resolution))) for img in [pure_text_image, simple_image , final_image]])
+            if tracker.name == "tensorboard":
+                    tracker.writer.add_images(f"Subject: {{batch_subject_prompt[cur_val_example_id]}}. Target: {batch_text_prompts[cur_val_example_id]} [Vanilla SD2.1 base / Full injection / Generated image]", np_images, epoch, dataformats="NHWC")
+            elif tracker.name == "wandb":
+                # 创建一个日志字典
+                log_dict = {
+                    f"Subject: {batch_subject_prompt[cur_val_example_id]}. Target: {batch_text_prompts[cur_val_example_id]} [Vanilla SD2.1 base / Full injection / Generated image]":
+                        [wandb.Image(img, caption=f"Epoch {epoch}") for img in np_images]  # 逐张上传
+                }
+                # 记录到 wandb
+                wandb.log(log_dict)
+            
+            else:
+                logger.warn(f"image logging not implemented for {tracker.name}")
 
     
     del pipeline
@@ -321,33 +337,47 @@ def loop_infer(args, batch_img_path, subject_features, vae, noise_scheduler, sub
         min_num_loop = args.num_interations + 1
         sim_threshold = 1
 
+    # calculate the add noise/inversion steps
+    infer_discrete_timesteps, num_inf_steps = retrieve_timesteps(noise_scheduler, args.infer_steps, device, None, None)
+    infer_discrete_timesteps = infer_discrete_timesteps.cpu().numpy().tolist()
+
+    noise_step = split_ratio * noise_scheduler.config.num_train_timesteps
+    threshold_timestep = min(filter(lambda x: x <= noise_step, infer_discrete_timesteps), key=lambda x: abs(x - noise_step)) # 找到最近且小的值
+
+    # find the index in timesteps and calculate how many are skiped 
+    threshold_idx = infer_discrete_timesteps.index(threshold_timestep)
+    skipped_steps = threshold_idx + 1
+
+
     while ((cur_loop_num < max_num_loop and sim < sim_threshold) or cur_loop_num < min_num_loop):
-        # add noise and convert the generated image back to a sketch image
-        noisy_latents = add_noise_to_image(noise_step = split_ratio * noise_scheduler.config.num_train_timesteps, args=args, img=loop_image, vae=vae, train_transforms=train_transforms, noise_scheduler=noise_scheduler)
-        
-        skipped_steps = int(args.infer_steps - split_ratio * args.infer_steps)
+
+        noisy_latents = add_noise_to_image(noise_step = threshold_timestep, args=args, img=loop_image, vae=vae, train_transforms=train_transforms, noise_scheduler=noise_scheduler)
+
+            
         with torch.no_grad():
             res = pipeline(
-                batch_text_prompt, 
+                batch_text_prompt if not args.do_editing else batch_text_prompt,
+                # "",
                 num_inference_steps=args.infer_steps, 
-                generator=generator, # don't assign random seed here, allow the model to denoise with some randomness in case of over-denoise during the interation.
-                subject_features = subject_features, 
-                subject_noise = subject_noise,
-                weight_dtype = weight_dtype,
-                subject_prompt = batch_subject_prompt,
+                # generator=generator,
+                subject_features= subject_features,
+                image_paths=batch_img_path,
+                weight_dtype=weight_dtype,
+                train_transforms=train_transforms,
+                subject_prompts=batch_subject_prompt,
                 args=args,
                 latents=noisy_latents,
                 latents_steps=skipped_steps,
-                guidance_scale= 7.5,
-                inversed_intermediate_latents=None
+                guidance_scale = 10,
+                threshold_timestep=threshold_timestep,
             )
         loop_image = res["images"][0]
         origin_loop_image = loop_image.resize(initial_image_size)
         origin_loop_image.save(f"{val_image_out_dir}/{batch_text_prompt}_{post_fix}/loop_{cur_loop_num}.png")
         
         sims = 0
-        sim = compute_clip_similarity(clip_model, clip_processor, image1=prev_image, image2=loop_image, device=subject_noise.device)
-        prev_image = loop_image
+        # sim = compute_clip_similarity(clip_model, clip_processor, image1=prev_image, image2=loop_image, device=subject_noise.device)
+        # prev_image = loop_image
         
         print(f"[Validation {batch_text_prompt}_{post_fix}][Loop {cur_loop_num}] Overall Similarity: {sim}.")
         cur_loop_num += 1
@@ -414,7 +444,18 @@ def parse_args_from_yaml(config_path=None, config_file=None):
 def init_acclerator(args):
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
     accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=logging_dir)
-    accelerator = Accelerator(log_with=args.report_to, gradient_accumulation_steps=args.gradient_accumulation_steps,mixed_precision=args.mixed_precision,project_config=accelerator_project_config,)
+
+    # deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='accelerate_configs/deepspeed_config.json', zero3_init_flag=True)
+    accelerator = Accelerator(
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        mixed_precision=args.mixed_precision,
+        # deepspeed_plugin=deepspeed_plugin,
+        log_with=args.report_to,
+        project_config=accelerator_project_config,
+        kwargs_handlers=[InitProcessGroupKwargs(backend="nccl", timeout=timedelta(seconds=60*60))]
+    )
+
+    # accelerator = Accelerator(log_with=args.report_to, gradient_accumulation_steps=args.gradient_accumulation_steps,mixed_precision=args.mixed_precision,project_config=accelerator_project_config,)
     
     if accelerator.is_local_main_process:
         datasets.utils.logging.set_verbosity_warning()
@@ -427,19 +468,23 @@ def init_acclerator(args):
     
     return accelerator
 
-def load_models_and_learnable_params(args, device):
+def load_models_and_learnable_params(args, device, weight_dtype):
     # load base models
-    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True)
+    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True, torch_dtype=weight_dtype)
     # Load the tokenizers
-    tokenizer_one = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path,subfolder="tokenizer",revision=args.revision,use_fast=False, local_files_only=True)
-    tokenizer_two = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer_2", revision=args.revision, use_fast=False, local_files_only=True)
+    tokenizer_one = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path,subfolder="tokenizer",revision=args.revision,use_fast=False, local_files_only=True, torch_dtype=weight_dtype)
+    tokenizer_two = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer_2", revision=args.revision, use_fast=False, local_files_only=True, torch_dtype=weight_dtype)
     
-    text_encoder_one = CLIPTextModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant, local_files_only=True)
-    text_encoder_two = CLIPTextModelWithProjection.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder_2", revision=args.revision, variant=args.variant, local_files_only=True)
-    # vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16, local_files_only=True)
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", local_files_only=True)
-    main_unet = UNet2DConditionModel_main.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, local_files_only=True)
-    reference_unet = UNet2DConditionModel_ref(args=args).from_pretrained(args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, local_files_only=True)
+    text_encoder_one = CLIPTextModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant, local_files_only=True, torch_dtype=weight_dtype)
+    text_encoder_two = CLIPTextModelWithProjection.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder_2", revision=args.revision, variant=args.variant, local_files_only=True, torch_dtype=weight_dtype)
+
+    try:
+        vae = AutoencoderKL.from_pretrained(args.vae_path, torch_dtype=torch.float16, local_files_only=True)
+    except:
+        vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", local_files_only=True, torch_dtype=weight_dtype)
+
+    main_unet = UNet2DConditionModel_main.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, local_files_only=True, torch_dtype=weight_dtype)
+    reference_unet = UNet2DConditionModel_ref(args=args).from_pretrained(args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, local_files_only=True, torch_dtype=weight_dtype)
     
     # clip_model, clip_processor = clip.load("ViT-B/32", device=device)
     clip_model, clip_processor = clip.load(args.clip_path, device=device)
@@ -462,12 +507,18 @@ def load_models_and_learnable_params(args, device):
 
 def register_adapter_and_configs(main_unet, reference_unet, args):
     all_blocks = nn.ModuleList([])
-    all_blocks.extend(main_unet.down_blocks)
-    all_blocks.append(main_unet.mid_block)
-    all_blocks.extend(main_unet.up_blocks)
+
+    try:
+        assert args.only_up == True
+        all_blocks.extend(main_unet.up_blocks)
+    except:
+        all_blocks.extend(main_unet.down_blocks)
+        all_blocks.append(main_unet.mid_block)
+        all_blocks.extend(main_unet.up_blocks)
 
     counter = 0
     # register
+
     for num_down, unet_block in enumerate(all_blocks):
         if hasattr(unet_block, "has_cross_attention") and unet_block.has_cross_attention:
             for num_attn, attn in enumerate(unet_block.attentions):
@@ -596,7 +647,7 @@ def main(config_path=None, config_file=None):
         weight_dtype = torch.bfloat16
     
     # load models, here, only main_UNet would contains trainable parameters while reference_UNet is merely a identical copy of SD2.1-base main_unet used for feature extraction
-    main_unet, reference_unet, noise_scheduler, tokenizer_one, tokenizer_two, text_encoder_one, text_encoder_two, vae, clip_model, clip_processor, num_of_adapters = load_models_and_learnable_params(args, accelerator.device)
+    main_unet, reference_unet, noise_scheduler, tokenizer_one, tokenizer_two, text_encoder_one, text_encoder_two, vae, clip_model, clip_processor, num_of_adapters = load_models_and_learnable_params(args, accelerator.device, weight_dtype)
     
     # Move text_encode and vae to gpu and cast to weight_dtype
     text_encoder_one.to(accelerator.device, dtype=weight_dtype)
@@ -622,8 +673,8 @@ def main(config_path=None, config_file=None):
     
     if accelerator.mixed_precision == "fp16":
         for params in trainable_params:
-            params.to(torch.float32)
-        cast_training_params([main_unet], dtype=torch.float32)
+            params.to(torch.float16)
+        cast_training_params([main_unet], dtype=torch.float16)
         pass
         
     elif accelerator.mixed_precision == "bf16":
@@ -640,20 +691,24 @@ def main(config_path=None, config_file=None):
     
     dataset_to_train =[]
     if args.with_coco:
-        coco2014_dataset = DatasetCOCO(args.coco2014["data_path"], transform=train_transforms, max_len=args.num_sub_img, tokenizer_one=tokenizer_one, tokenizer_two=tokenizer_two, train_split=args.coco2014["train_split"], args=args, subset_size=args.coco2014['subset_size'])
+        coco2014_dataset = DatasetCOCO_sdxl(args.coco2014["data_path"], transform=train_transforms, max_len=args.num_sub_img, tokenizer_one=tokenizer_one, tokenizer_two=tokenizer_two, train_split=args.coco2014["train_split"], args=args, subset_size=args.coco2014['subset_size'])
         dataset_to_train.append(coco2014_dataset)
         
     if args.with_youtube_vis:
-        youtubeVIS_dataset = YoutubeVISDataset_unet(image_dir=args.youtubeVIS['image_dir'], anno=args.youtubeVIS['anno'], meta=args.youtubeVIS['meta'], tokenizer_one=tokenizer_one, tokenizer_two=tokenizer_two, sub_size=args.resolution, transforms=train_transforms, ytbvis_subset_size=args.youtubeVIS['subset_size'], args=args)
+        youtubeVIS_dataset = YoutubeVISDataset_unet_sdxl(image_dir=args.youtubeVIS['image_dir'], anno=args.youtubeVIS['anno'], meta=args.youtubeVIS['meta'], tokenizer_one=tokenizer_one, tokenizer_two=tokenizer_two, sub_size=args.resolution, transforms=train_transforms, ytbvis_subset_size=args.youtubeVIS['subset_size'], args=args)
         dataset_to_train.append(youtubeVIS_dataset)
+
+    if args.with_vitonhd:
+        vitonHD_dataset = VitonHDDataset_unet(image_dir=args.vitonHD_dataset['image_dir'], tokenizer_one=tokenizer_one, tokenizer_two=tokenizer_two, sub_size=args.resolution, transforms=train_transforms, vitonhd_subset_size=args.vitonHD_dataset['subset_size'], args=args)
+        dataset_to_train.append(vitonHD_dataset)
     
     if args.with_subject200k:
-        subject200k_dataset = Subject200k_dataset(args.subject200k["data_path"], transform=train_transforms, max_len=4, tokenizer_one=tokenizer_one, tokenizer_two=tokenizer_two, subset_size=args.subject200k['subset_size'])
-        dataset_to_train.append(subject200k_dataset)
+        subject200k_dataset_sdxl = Subject200k_dataset_sdxl(args.subject200k["data_path"], transform=train_transforms, max_len=4, tokenizer_one=tokenizer_one, tokenizer_two=tokenizer_two, subset_size=args.subject200k['subset_size'], args=args)
+        dataset_to_train.append(subject200k_dataset_sdxl)
         
     if args.with_subject200k_jigsaw:
-        subject200k_dataset_jigsaw = Subject200k_dataset_jigsaw(args.subject200k_jigsaw["data_path"], transform=train_transforms, max_len=4, tokenizer_one=tokenizer_one, tokenizer_two=tokenizer_two, subset_size=args.subject200k_jigsaw['subset_size'])
-        dataset_to_train.append(subject200k_dataset_jigsaw)
+        subject200k_dataset_sdxl_jigsaw_sdxl = Subject200k_dataset_sdxl_jigsaw_sdxl(args.subject200k_jigsaw["data_path"], transform=train_transforms, max_len=4, tokenizer=tokenizer_one, tokenizer_two=tokenizer_two, subset_size=args.subject200k_jigsaw['subset_size'], args=args)
+        dataset_to_train.append(subject200k_dataset_sdxl_jigsaw_sdxl)
     
     assert len(dataset_to_train) > 0, "No dataset is loaded!"
     
@@ -664,23 +719,34 @@ def main(config_path=None, config_file=None):
         target_image = target_image.to(memory_format=torch.contiguous_format).float()
             
         input_ids_one = torch.stack([example["input_ids"] for example in examples])
-        subject_input_ids_one = torch.vstack([padding_subjects(example["subject_input_ids"], args.num_sub_img - 1 if example["dataset_name"] in ["youtubeVIS", "subject200k"] else example["padding_num"]) for example in examples])
+        subject_input_ids_one = torch.vstack([padding_subjects(example["subject_input_ids"], example["padding_num"]) for example in examples])
         
         input_ids_two = torch.stack([example["input_ids_two"] for example in examples])
-        subject_input_ids_two = torch.vstack([padding_subjects(example["subject_input_ids_two"], args.num_sub_img - 1 if example["dataset_name"] in ["youtubeVIS", "subject200k"] else example["padding_num"]) for example in examples])
+        subject_input_ids_two = torch.vstack([padding_subjects(example["subject_input_ids_two"], example["padding_num"]) for example in examples])
         
-        subject_images = torch.vstack([padding_subjects(example["subject_images"], args.num_sub_img - 1 if example["dataset_name"] in ["youtubeVIS", "subject200k"] else example["padding_num"]) for example in examples]) # B * N, C, W, H
+        subject_images = torch.vstack([padding_subjects(example["subject_images"], example["padding_num"]) for example in examples]) # B * N, C, W, H
         # we need to mask out the black padded subject imagee
-        padding_nums = torch.tensor([3 if example["dataset_name"] in ["youtubeVIS", "subject200k"] else example["padding_num"] for example in examples])
+        padding_nums = torch.tensor([example["padding_num"] for example in examples])
+        
+        if not args.with_staged_timestep:
+            timesteps = torch.randint(0, 1000, (args.train_batch_size, ))
+        else:
+            # some training hyperparams
+            timesteps = []
+            for example in examples: # following anydoor [0 ... High Res ... T/2 ... Low Res ... T]
+                if example["dataset_name"] in ["vitonHD", "youtubeVIS", "coco2014"]: # low quality for the early stages 
+                    timesteps.append(min(random.randint(int(noise_scheduler.config.num_train_timesteps // 3), noise_scheduler.config.num_train_timesteps - 1), 999))
+                else:
+                    t = random.randint(0, int(2 * noise_scheduler.config.num_train_timesteps // 3 - 1))
+                    timesteps.append(min(t, 999))
             
-        # some training hyperparams
-        timestep = torch.randint(0, noise_scheduler.config.num_train_timesteps, (args.train_batch_size, ))
+            timesteps = torch.tensor(timesteps).reshape((args.train_batch_size,))
+
         target_noise = torch.randn((args.train_batch_size, 4, args.resolution // 8, args.resolution // 8), dtype=weight_dtype)
         subject_noise = torch.randn((1, 4, args.resolution // 8, args.resolution // 8), dtype=weight_dtype)
         target_prompt = [example["target_prompt"] for example in examples]
         subject_prompt = [example["subject_prompt"] for example in examples]
-        
-        return {"target_image": target_image, "input_ids_one": input_ids_one, "input_ids_two": input_ids_two,  "subject_input_ids_one": subject_input_ids_one, "subject_input_ids_two": subject_input_ids_two, "subject_images": subject_images, "padding_num": padding_nums, "dataset_name": examples[0]["dataset_name"], "timestep": timestep, "target_prompt": target_prompt, "subject_prompt": subject_prompt, "target_noise": target_noise, "subject_noise": subject_noise}
+        return {"target_image": target_image, "input_ids_one": input_ids_one, "input_ids_two": input_ids_two,  "subject_input_ids_one": subject_input_ids_one, "subject_input_ids_two": subject_input_ids_two, "subject_images": subject_images, "padding_num": padding_nums, "dataset_name": [example["dataset_name"] for example in examples], "timesteps": timesteps, "target_prompt": target_prompt, "subject_prompt": subject_prompt, "target_noise": target_noise, "subject_noise": subject_noise}
     
     # DataLoaders creation:
     train_dataloader = torch.utils.data.DataLoader(
@@ -729,6 +795,7 @@ def main(config_path=None, config_file=None):
             )
     # Afterwards we recalculate our number of training epochs
     args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
+
     
     if accelerator.is_main_process:
         valid_types = (int, float, str, bool, torch.Tensor)
@@ -749,6 +816,7 @@ def main(config_path=None, config_file=None):
     first_epoch = 0
     
     # Potentially load in the weights and states from a previous save
+    resumed = False
     if args.resume_from_checkpoint:
         if args.resume_from_checkpoint != "latest":
             path = os.path.basename(args.resume_from_checkpoint)
@@ -771,12 +839,18 @@ def main(config_path=None, config_file=None):
             global_step = int(path.split("-")[1])
             accelerator.load_state(load_path)
             
+            # breakpoint()
+            # if accelerator.is_main_process:
+            #     main_unet = accelerator.unwrap_model(main_unet)
+            #     main_unet.save_pretrained("/mnt/workspace/workgroup/duanzicheng.dzc/checkpoints/ezigen/debug/fp16_ckpt/", torch_dtype=torch.float16, is_main_process=accelerator.is_main_process, max_shard_size='50GB', safe_serialization=False)
+            #     sys.exit(0)
+
             initial_global_step = global_step
             first_epoch = global_step // num_update_steps_per_epoch
             resumed = True # to mark if the model is freshly resumed from local
     else:
         initial_global_step = 0
-        resumed = False
+        resumed = True
     
 
     progress_bar = tqdm(
@@ -806,6 +880,23 @@ def main(config_path=None, config_file=None):
             if isinstance(arg_name, str) and arg_name.startswith("variation_num_"):
                 batch_variation_num.append(arg_value)
     
+    # save_path = os.path.join(args.output_dir, "Final")
+
+    # main_unet = accelerator.unwrap_model(main_unet)
+    # main_unet.save_pretrained(save_path, torch_dtype=torch.float16, is_main_process=accelerator.is_main_process, max_shard_size='50GB', safe_serialization=False)
+
+    # logger.info(f"Final model saved state to {save_path}")
+        
+    # state_dict = torch.load("/mnt/workspace/workgroup/duanzicheng.dzc/checkpoints/ezigen/train/train_sdxl_staged_timesteps_more_data_fp16/Final/diffusion_pytorch_model.bin")
+    # main_unet.load_state_dict(state_dict, strict=False)
+
+
+    # if accelerator.is_main_process:
+    #     subject_noise = torch.randn((1, 4, args.resolution // 8, args.resolution // 8), dtype=weight_dtype)
+    #     if (resumed==True or (args.target_prompt_1 is not None and global_step % args.validation_steps == 0)) and accelerator.is_main_process:
+    #         vis_images = log_validation_batch(vae, text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, accelerator.unwrap_model(main_unet), reference_unet, noise_scheduler, subject_noise, train_transforms, args, accelerator, weight_dtype, 0, batch_text_prompts, batch_origin_text_prompts, batch_subject_prompts, batch_img_paths, batch_variation_num, clip_model, clip_processor)
+    # accelerator.wait_for_everyone()
+
     for epoch in range(first_epoch, args.num_train_epochs):
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
@@ -813,8 +904,12 @@ def main(config_path=None, config_file=None):
             target_image = batch["target_image"].to(weight_dtype)
             target_input_ids_one = batch["input_ids_one"]
             target_input_ids_two = batch["input_ids_two"]
-            target_noise = batch['target_noise']
-            target_timestep = batch['timestep']
+            target_noise = batch['target_noise'].to(weight_dtype)
+            target_timestep = batch['timesteps'].to(weight_dtype)
+
+            t_mask = target_timestep >= 1000
+            target_timestep[t_mask] = torch.randint(500, 999, (t_mask.sum(),)).to(weight_dtype).to(target_timestep.device)
+
             padding_nums = batch['padding_num']
             target_timestep = target_timestep.long()
             
@@ -822,8 +917,8 @@ def main(config_path=None, config_file=None):
             subject_images = batch["subject_images"].to(weight_dtype)
             subject_input_ids_one = batch["subject_input_ids_one"]
             subject_input_ids_two = batch["subject_input_ids_two"]
-            subject_noise = batch['subject_noise']
-            subject_timestep = torch.tensor(args.subject_timestep, device=subject_images.device).repeat(subject_images.shape[0])
+            subject_noise = batch['subject_noise'].to(weight_dtype)
+            subject_timestep = torch.tensor(args.subject_timestep, device=subject_images.device).repeat(subject_images.shape[0]).to(weight_dtype)
             subject_timestep = subject_timestep.long()
             if subject_noise.shape[0] != subject_images.shape[0]:
                 subject_noise = subject_noise.repeat(subject_images.shape[0], 1, 1, 1)
@@ -845,7 +940,7 @@ def main(config_path=None, config_file=None):
                 return add_time_ids
             
             subject_pooled_prompt_embeds = subject_pooled_prompt_embeds.view(subject_latents.shape[0], -1)
-            subject_add_time_ids = torch.cat([compute_time_ids(s, c) for s, c in zip([(1024, 1024) for i in range(subject_latents.shape[0])], [(0, 0) for i in range(subject_latents.shape[0])])])
+            subject_add_time_ids = torch.cat([compute_time_ids(s, c) for s, c in zip([(args.resolution, args.resolution) for i in range(subject_latents.shape[0])], [(0, 0) for i in range(subject_latents.shape[0])])])
             
             # obtain subject features from reference UNet for later usage
             reference_unet_unet_added_conditions = {"time_ids": subject_add_time_ids}
@@ -856,28 +951,41 @@ def main(config_path=None, config_file=None):
             
             subject_features = [block_feat.reshape(args.train_batch_size,-1,block_feat.shape[-1]) for block_feat in subject_features] # bsz ,sub_image_patches (later concat to k and v), dim 
             
-            # random drop subject feature
-            if random.randint(1,10) / 10 > args.drop_reference_ratio and batch["dataset_name"] == "subject200k":
+            # random drop all reference, including text, this is for CFG
+            if random.randint(1,10) / 10 < args.drop_reference_ratio:
                 # turn to dummy inputs, and make sure to pad
                 subject_features = [torch.zeros_like(subject_features[i]).to(weight_dtype) for i in range(num_of_adapters)]
                 padding_nums = torch.tensor([args.num_sub_img] * args.train_batch_size)
-            
+
             # preprocess target related features
             target_latents = vae.encode(target_image).latent_dist.sample() # [bsz, 4, args.resolution // 8, args.resolution // 8]
             target_latents = target_latents * vae.config.scaling_factor
+
             noisy_target_latents = noise_scheduler.add_noise(target_latents, target_noise, target_timestep)
             target_encoder_hidden_states = text_encoder_one(target_input_ids_one, return_dict=False)[0]
             target_pooled_prompt_embeds, target_encoder_hidden_states_two = text_encoder_two(target_input_ids_two, return_dict=False)
             
+            #### Text one
             target_encoder_hidden_states = torch.cat((target_encoder_hidden_states, target_encoder_hidden_states_two), dim=-1)
             
+            #### Text two
             target_pooled_prompt_embeds = target_pooled_prompt_embeds.view(args.train_batch_size, -1)
-            target_add_time_ids = torch.cat([compute_time_ids(s, c) for s, c in zip([(1024, 1024) for i in range(args.train_batch_size)], [(0, 0) for i in range(args.train_batch_size)])])
             
+            ########## Drop Text Start ##########
+            # random drop all text prompts, purely rely on subject
+            if random.randint(1,1000) / 1000 < args.drop_text_ratio:
+                target_encoder_hidden_states = torch.zeros_like(target_encoder_hidden_states)
+
+            # always set text emb to zero, reduce the effect of text
+            if args.remove_add_text_emb:
+                target_pooled_prompt_embeds = torch.zeros_like(target_pooled_prompt_embeds).to(weight_dtype)
+            ########## Drop Text End ##########
+
+            target_add_time_ids = torch.cat([compute_time_ids(s, c) for s, c in zip([(1024, 1024) for i in range(args.train_batch_size)], [(0, 0) for i in range(args.train_batch_size)])])
+
             # obtain subject features from reference UNet for later usage
             main_unet_unet_added_conditions = {"time_ids": target_add_time_ids}
             main_unet_unet_added_conditions.update({"text_embeds": target_pooled_prompt_embeds})
-            
             
             # Get the target for loss depending on the prediction type
             if args.prediction_type is not None:
@@ -897,9 +1005,9 @@ def main(config_path=None, config_file=None):
                 for i in range(args.train_batch_size):
                     training_attn_mask[i, :, - padding_nums[i] * 2:] = -50000.0
                 training_attn_mask = training_attn_mask.to(weight_dtype)
-            
+            # breakpoint()
             # obtain predicted noise
-            model_pred = main_unet(noisy_target_latents, target_timestep, target_encoder_hidden_states, added_cond_kwargs=main_unet_unet_added_conditions, return_dict=False, subject_feats=subject_features, training_attn_mask=training_attn_mask)[0]
+            model_pred = main_unet(noisy_target_latents, target_timestep, target_encoder_hidden_states, added_cond_kwargs=main_unet_unet_added_conditions, return_dict=False, subject_feats=subject_features, training_attn_mask=training_attn_mask, args=args)[0]
             
             if args.snr_gamma is None:
                 loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
@@ -938,7 +1046,10 @@ def main(config_path=None, config_file=None):
                         plt.figure(figsize=(10, 5))
                         plt.bar(range(1, num_of_adapters + 1), values.to(torch.float32).numpy())  # 创建柱状图
                         plt.title('learnable_weights')
-                        tracker.writer.add_figure('learnable_weights', plt.gcf(), step)
+                        if tracker.name == "tensorboard":
+                            tracker.writer.add_figure('learnable_weights', plt.gcf(), step)
+                        else:
+                            wandb.log({'learnable_weights': wandb.Image(plt.gcf())})
                         plt.close()
                 
             # Checks if the accelerator has performed an optimization step behind the scenesw
@@ -972,6 +1083,10 @@ def main(config_path=None, config_file=None):
                     save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                         
                     accelerator.save_state(save_path)
+                    
+                    unwrapped_main_unet = accelerator.unwrap_model(main_unet)
+                    unwrapped_main_unet.save_pretrained(save_path, torch_dtype=torch.float16, is_main_process=accelerator.is_main_process, max_shard_size='50GB', safe_serialization=False)
+
                     resumed = False
                     # accelerator.save_model(main_unet, save_path)
                     # save_random_state(os.path.join(save_path, "random_states_0.pth"))
@@ -981,25 +1096,41 @@ def main(config_path=None, config_file=None):
                 progress_bar.set_postfix(**logs)
                 if global_step >= args.max_train_steps:
                     break
-            
-            if args.target_prompt_1 is not None and global_step % args.validation_steps == 0 and accelerator.is_main_process:
-                vis_images = log_validation_batch(vae, text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, accelerator.unwrap_model(main_unet), reference_unet, noise_scheduler, subject_noise, train_transforms, args, accelerator, weight_dtype, epoch, batch_text_prompts, batch_origin_text_prompts, batch_subject_prompts, batch_img_paths, batch_variation_num, clip_model, clip_processor)
-                    
-                        
-    accelerator.wait_for_everyone()
-    if accelerator.is_main_process:
-        if not resumed:
-            print("Final saving!")
-            save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-            accelerator.save_model(main_unet, save_path)
-            save_random_state(os.path.join(save_path, "random_states_0.pth"))
-            logger.info(f"Final model saved state to {save_path}")
-        
-        print("Final eval!")
-        vis_images = log_validation_batch(accelerator.unwrap_model(vae), accelerator.unwrap_model(text_encoder), tokenizer, accelerator.unwrap_model(main_unet), reference_unet, noise_scheduler, subject_noise, train_transforms, args, accelerator, weight_dtype, epoch, batch_text_prompts, batch_origin_text_prompts, batch_subject_prompts, batch_img_paths, batch_variation_num, clip_model, clip_processor)
 
+
+            if (resumed==True or (args.target_prompt_1 is not None and global_step % args.validation_steps == 0)) and accelerator.is_main_process:
+                vis_images = log_validation_batch(vae, text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, accelerator.unwrap_model(main_unet), reference_unet, noise_scheduler, subject_noise, train_transforms, args, accelerator, weight_dtype, epoch, batch_text_prompts, batch_origin_text_prompts, batch_subject_prompts, batch_img_paths, batch_variation_num, clip_model, clip_processor)
+                args.validation_steps = 2000
+                logger.info(f"Validation steps changed to {args.validation_steps}!")
+                resumed = False
+
+
+    # if accelerator.is_main_process:
+    if not resumed or args.num_train_epochs <= initial_global_step:
+        print("Final saving!")
+        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+        accelerator.save_state(save_path)
+        
+        main_unet = accelerator.unwrap_model(main_unet)
+        main_unet.save_pretrained(save_path, torch_dtype=torch.float16, is_main_process=accelerator.is_main_process, max_shard_size='50GB', safe_serialization=False)
+
+        logger.info(f"Final model saved state to {save_path}")
+        
+        # state_dict = torch.load(os.path.join(save_path, "diffusion_pytorch_model.bin"))
+        # main_unet.load_state_dict(state_dict, strict=False)
+
+        print("Final eval!")
+        if accelerator.is_main_process:
+            vis_images = log_validation_batch(vae, text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, accelerator.unwrap_model(main_unet), reference_unet, noise_scheduler, subject_noise, train_transforms, args, accelerator, weight_dtype, epoch, batch_text_prompts, batch_origin_text_prompts, batch_subject_prompts, batch_img_paths, batch_variation_num, clip_model, clip_processor)
+
+        # sys.exit()
+        # os.kill(os.getpid(), signal.SIGKILL)
+        
+    accelerator.wait_for_everyone()
     accelerator.end_training()
-    os._exit(0)
+    sys.exit()
+    os.kill(os.getpid(), signal.SIGKILL)
+    sys.exit()
 
 if __name__ == "__main__":
     main(config_path=None, config_file=None)

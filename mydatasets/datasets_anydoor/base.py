@@ -205,6 +205,9 @@ class BaseDataset_unet(Dataset):
         tar_bbox_on_padded_image = get_bbox_from_mask(expanded_collage_mask)
         
         masked_sub_image_aug_pil = Image.fromarray(masked_sub_image_aug.astype(np.uint8))
+
+        
+
         if type(transforms) != str:
             masked_sub_image_aug = transforms(Image.fromarray(masked_sub_image_aug.astype(np.uint8)))
             cropped_target_image_cropped = transforms(Image.fromarray(cropped_target_image_cropped.astype(np.uint8)))

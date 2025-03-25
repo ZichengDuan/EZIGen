@@ -1072,6 +1072,7 @@ class UNet2DConditionModel_main(ModelMixin, ConfigMixin, UNet2DConditionLoadersM
         aug_emb = self.get_aug_embed(
             emb=emb, encoder_hidden_states=encoder_hidden_states, added_cond_kwargs=added_cond_kwargs
         )
+        # aug_emb = None # dzc, dzc, dzc
         if self.config.addition_embed_type == "image_hint":
             aug_emb, hint = aug_emb
             sample = torch.cat([sample, hint], dim=1)

@@ -9,7 +9,7 @@ from tqdm import tqdm
 import json
 
 
-class Subject200k_dataset_parquet(Dataset):
+class Subject200k_dataset_sdxl_parquet(Dataset):
     def __init__(self, data_paths=None, parquet_paths=None, transform=None, max_len=4, tokenizer_one=None, tokenizer_two=None, args=None, subset_size=None, subset = None):
         self.data_paths = data_paths
         self.parquet_paths = parquet_paths
@@ -120,7 +120,7 @@ if __name__ == "__main__":
     
     subset_idx = 3 # [0, 1, 2, 3, 4 ,5]
 
-    dataset = Subject200k_dataset_parquet(
+    dataset = Subject200k_dataset_sdxl_parquet(
         parquet_paths="data/Subjects200K_collection3/data",
         transform=train_transforms,
         tokenizer_one=None,

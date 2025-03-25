@@ -2,7 +2,7 @@ accelerate
 datasets
 matplotlib
 numba
-numpy
+numpy==1.26
 omegaconf
 opencv_python_headless
 packaging
@@ -11,8 +11,10 @@ PyYAML
 scipy
 tqdm
 transformers
-tqdm
 wandb
 torchmetrics
 ftfy
 regex
+pycocotools
+albumentations
+tensorboard

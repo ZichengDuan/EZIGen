@@ -290,10 +290,9 @@ class InversePipelinePartial(StableDiffusionPipeline):
             with self.progress_bar(total=num_inference_steps) as progress_bar:
                 #for i, t in enumerate(timesteps.flip(0)[1:-1]):
                 for i, t in enumerate(timesteps):
-                    if noise_step and noise_step * num_inference_steps <= i: # inverse rate * inferstep = 0.6 * 20 = 12, therefore when i >= 12, break
+                    if noise_step and noise_step * num_inference_steps <= i:
                         break
-                    
-                    
+                        
                     # expand the latents if we are doing classifier free guidance
                     latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
                     latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)

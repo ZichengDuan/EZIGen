@@ -10,7 +10,8 @@
       "request": "launch",
       "program": "${file}",
       "console": "integratedTerminal",
-      "justMyCode": false
+      "justMyCode": false,
+      "args": ["--config","configs/train_config_sdxl_staged_timesteps_more_data_fp16.yaml"]
     }
   ]
 }

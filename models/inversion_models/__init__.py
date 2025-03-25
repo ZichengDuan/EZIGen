@@ -3,3 +3,7 @@ from .inverse_pipeline_partial import *
 from .inverse_21_base_ddpm_partial import *
 from .clip import *
 from .schedulers import *
+from .inverse_pipeline_xl_partial import *
+from .inverse_pipeline_xl import *
+from .inverse_sdxl import *
+from .inverse_sdxl_dpmsolver_partial import *

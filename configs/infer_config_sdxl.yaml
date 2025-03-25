@@ -1,9 +1,18 @@
 # checkpoint name
-pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
-checkpoint_path: experiments/sdxl_with_subject200k_and_more_coco_and_jigsaw/checkpoint-50000 # e.g. checkpoint-200000
-clip_path: /home/a1901664/.cache/clip/ViT-B-32.pt # or simply "ViT-B/32" and let transformers module do its job
+pretrained_model_name_or_path: hf_models/stabilityai--stable-diffusion-xl-base-1.0
+clip_path: hf_models/ViT-B-32.pt # or simply "ViT-B/32" and let transformers module do its job
+output_dir: experiments/train/train_sdxl
+vae_path: /mnt/workspace/workgroup/duanzicheng.dzc/hf_models/madebyollin--sdxl-vae-fp16-fix
+
+# checkpoint_path: experiments/staged_training/checkpoint-39790 # e.g. checkpoint-200000
+# checkpoint_path: prev_exp/train/train_sdxl_more_data/checkpoint-39790 # e.g. checkpoint-200000
+# checkpoint_path: prev_exp/train/train_sdxl/checkpoint-9200 # e.g. checkpoint-200000
+# checkpoint_path: /root/debug_ckpt/checkpoint-24000 # e.g. checkpoint-200000
+checkpoint_path: /mnt/workspace/workgroup/duanzicheng.dzc/checkpoints/ezigen/train/train_sdxl_staged_timesteps_more_data_fp16/checkpoint-28000/diffusion_pytorch_model.bin # e.g. checkpoint-200000
+# checkpoint_path: /mnt/workspace/workgroup/duanzicheng.dzc/checkpoints/ezigen/debug/fp16_ckpt/diffusion_pytorch_model.bin # e.g. checkpoint-200000
 
 # system defaults, !no need to change anything here!
+mixed_precision: 'fp16'
 local_rank: 0 # we only do inference on a single GPU
 resolution: 1024
 subject_denoise_timestep: 1
@@ -31,7 +40,7 @@ dataloader_num_workers: 0
 max_train_steps: null
 snr_gamma: null
 variant: null
-residual_connection: true
+residual_connection: false
 
 # no need to change
 infer_mode: true # we are now infer mode

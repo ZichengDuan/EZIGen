@@ -13,6 +13,7 @@ import safetensors
 import pickle
 import glob
 import torch
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import retrieve_timesteps
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
@@ -25,7 +26,6 @@ from packaging import version
 from tqdm.auto import tqdm
 from matplotlib import pyplot as plt
 from omegaconf import OmegaConf
-from numba import cuda
 import argparse
 import yaml
 from PIL import Image
@@ -54,8 +54,8 @@ from accelerate.state import AcceleratorState
 from accelerate.logging import get_logger
 from accelerate import Accelerator
 
-from mydatasets import DatasetCOCO
-from mydatasets.datasets_anydoor import YoutubeVISDataset_unet
+from mydatasets import DatasetCOCO_sd21, Subject200k_dataset_sd21
+from mydatasets.datasets_anydoor import YoutubeVISDataset_unet_sd21
 
 from models.inversion_models import InversePipelinePartial, ExceptionCLIPTextModel, partial_inverse
 from models.main_unet.unet_main import UNet2DConditionModel_main
@@ -329,28 +329,39 @@ def loop_infer(args, batch_img_path, subject_features, vae, noise_scheduler, sub
         min_num_loop = args.num_interations + 1
         sim_threshold = 1
 
+    # calculate the add noise/inversion steps
+    infer_discrete_timesteps, num_inf_steps = retrieve_timesteps(noise_scheduler, args.infer_steps, device, None, None)
+    infer_discrete_timesteps = infer_discrete_timesteps.cpu().numpy().tolist()
+
+    noise_step = split_ratio * noise_scheduler.config.num_train_timesteps
+    threshold_timestep = min(filter(lambda x: x <= noise_step, infer_discrete_timesteps), key=lambda x: abs(x - noise_step)) # 找到最近且小的值
+
+    # find the index in timesteps and calculate how many are skiped 
+    threshold_idx = infer_discrete_timesteps.index(threshold_timestep)
+    skipped_steps = threshold_idx + 1
+
+
     while ((cur_loop_num < max_num_loop and sim < sim_threshold) or cur_loop_num < min_num_loop):
-        # add noise and convert the generated image back to a sketch image
-        noisy_latents = add_noise_to_image(noise_step = split_ratio * noise_scheduler.config.num_train_timesteps, args=args, img=loop_image, vae=vae, train_transforms=train_transforms, noise_scheduler=noise_scheduler)
-        
-        skipped_steps = int(args.infer_steps - split_ratio * args.infer_steps)
+
+        noisy_latents = add_noise_to_image(noise_step = threshold_timestep, args=args, img=loop_image, vae=vae, train_transforms=train_transforms, noise_scheduler=noise_scheduler)
+
+            
         with torch.no_grad():
             res = pipeline(
-                batch_text_prompt, 
+                batch_text_prompt if not args.do_editing else batch_text_prompt,
+                # "",
                 num_inference_steps=args.infer_steps, 
-                generator=generator, # don't assign random seed here, allow the model to denoise with some randomness in case of over-denoise during the interation.
-                subject_features = subject_features, 
-                image_paths = batch_img_path,
-                subject_noise = subject_noise,
-                weight_dtype = weight_dtype,
+                # generator=generator,
+                subject_features= subject_features,
+                image_paths=batch_img_path,
+                weight_dtype=weight_dtype,
                 train_transforms=train_transforms,
-                subject_prompt = batch_subject_prompt,
+                subject_prompts=batch_subject_prompt,
                 args=args,
                 latents=noisy_latents,
                 latents_steps=skipped_steps,
-                guidance_scale= 7.5,
-                # negative_prompt='dark, dim, blur, dizzy, defocus',
-                inversed_intermediate_latents=None
+                guidance_scale = 10,
+                threshold_timestep=threshold_timestep,
             )
         loop_image = res["images"][0]
         origin_loop_image = loop_image.resize(initial_image_size)
@@ -437,15 +448,15 @@ def init_acclerator(args):
         diffusers.utils.logging.set_verbosity_error()
     
     return accelerator
-
-def load_models_and_learnable_params(args, device):
+    
+def load_models_and_learnable_params(args, device, weight_dtype):
     # load base models
-    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True)
-    tokenizer = CLIPTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer")
-    text_encoder = CLIPTextModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, local_files_only=True)
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, local_files_only=True)
-    main_unet = UNet2DConditionModel_main.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision, local_files_only=True)
-    reference_unet = UNet2DConditionModel_ref(args=args).from_pretrained(args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision, local_files_only=True)
+    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True, torch_dtype=weight_dtype)
+    tokenizer = CLIPTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer", torch_dtype=weight_dtype)
+    text_encoder = CLIPTextModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, local_files_only=True, torch_dtype=weight_dtype)
+    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, local_files_only=True, torch_dtype=weight_dtype)
+    main_unet = UNet2DConditionModel_main.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision, local_files_only=True, torch_dtype=weight_dtype)
+    reference_unet = UNet2DConditionModel_ref(args=args).from_pretrained(args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision, local_files_only=True, torch_dtype=weight_dtype)
     
     # clip_model, clip_processor = clip.load("ViT-B/32", device=device)
     clip_model, clip_processor = clip.load(args.clip_path, device=device)
@@ -575,7 +586,7 @@ def main(config_path=None, config_file=None):
         os.makedirs(args.output_dir, exist_ok=True)
 
     # load models, here, only main_UNet would contains trainable parameters while reference_UNet is merely a identical copy of SD2.1-base main_unet used for feature extraction
-    main_unet, reference_unet, noise_scheduler, tokenizer, text_encoder, vae,  clip_model, clip_processor = load_models_and_learnable_params(args, accelerator.device)
+    main_unet, reference_unet, noise_scheduler, tokenizer, text_encoder, vae,  clip_model, clip_processor = load_models_and_learnable_params(args, accelerator.device, weight_dtype)
     
     # Move text_encode and vae to gpu and cast to weight_dtype
     text_encoder.to(accelerator.device, dtype=weight_dtype)
@@ -607,13 +618,25 @@ def main(config_path=None, config_file=None):
     
     dataset_to_train =[]
     if args.with_coco:
-        coco2014_dataset = DatasetCOCO(args.coco2014["data_path"], transform=train_transforms, max_len=args.num_sub_img, tokenizer=tokenizer, train_split=args.coco2014["train_split"], args=args, subset_size=args.coco2014['subset_size'])
+        coco2014_dataset = DatasetCOCO_sd21(args.coco2014["data_path"], transform=train_transforms, max_len=args.num_sub_img, tokenizer=tokenizer, train_split=args.coco2014["train_split"], args=args, subset_size=args.coco2014['subset_size'])
         dataset_to_train.append(coco2014_dataset)
         
     if args.with_youtube_vis:
-        youtubeVIS_dataset = YoutubeVISDataset_unet(image_dir=args.youtubeVIS['image_dir'], anno=args.youtubeVIS['anno'], meta=args.youtubeVIS['meta'], tokenizer=tokenizer, sub_size=args.resolution, transforms=train_transforms, ytbvis_subset_size=args.youtubeVIS['subset_size'], args=args)
+        youtubeVIS_dataset = YoutubeVISDataset_unet_sd21(image_dir=args.youtubeVIS['image_dir'], anno=args.youtubeVIS['anno'], meta=args.youtubeVIS['meta'], tokenizer=tokenizer, sub_size=args.resolution, transforms=train_transforms, ytbvis_subset_size=args.youtubeVIS['subset_size'], args=args)
         dataset_to_train.append(youtubeVIS_dataset)
     
+    # if args.with_vitonhd:
+    #     vitonHD_dataset = VitonHDDataset_unet_sd21(image_dir=args.vitonHD_dataset['image_dir'], tokenizer=tokenizer, sub_size=args.resolution, transforms=train_transforms, vitonhd_subset_size=args.vitonHD_dataset['subset_size'], args=args)
+    #     dataset_to_train.append(vitonHD_dataset)
+    
+    if args.with_subject200k:
+        subject200k_dataset_sd21 = Subject200k_dataset_sd21(args.subject200k["data_path"], transform=train_transforms, max_len=4, tokenizer=tokenizer, subset_size=args.subject200k['subset_size'], args=args)
+        dataset_to_train.append(subject200k_dataset_sd21)
+        
+    if args.with_subject200k_jigsaw:
+        subject200k_dataset_sdxl_jigsaw_sd21 = Subject200k_dataset_sdxl_jigsaw_sd21(args.subject200k_jigsaw["data_path"], transform=train_transforms, max_len=4, tokenizer=tokenizer, subset_size=args.subject200k_jigsaw['subset_size'], args=args)
+        dataset_to_train.append(subject200k_dataset_sdxl_jigsaw_sd21)
+        
     assert len(dataset_to_train) > 0, "No dataset is loaded!"
     
     train_dataset = ConcatDataset(dataset_to_train)
@@ -624,21 +647,31 @@ def main(config_path=None, config_file=None):
         target_image = target_image.to(memory_format=torch.contiguous_format).float()
             
         input_ids = torch.stack([example["input_ids"] for example in examples])
-        subject_input_ids = torch.vstack([padding_subjects(example["subject_input_ids"], args.num_sub_img - 1 if example["dataset_name"] == "youtubeVIS" else example["padding_num"]) for example in examples])
+        subject_input_ids = torch.vstack([padding_subjects(example["subject_input_ids"], example["padding_num"]) for example in examples])
         
-        subject_images = torch.vstack([padding_subjects(example["subject_images"], args.num_sub_img - 1 if example["dataset_name"] == "youtubeVIS" else example["padding_num"]) for example in examples]) # B * N, C, W, H
+        subject_images = torch.vstack([padding_subjects(example["subject_images"], example["padding_num"]) for example in examples]) # B * N, C, W, H
         # we need to mask out the black padded subject imagee
-        padding_nums = torch.tensor([3 if example["dataset_name"] == "youtubeVIS" else example["padding_num"] for example in examples])
+        padding_nums = torch.tensor([example["padding_num"] for example in examples])
             
-        # some training hyperparams
-        timestep = torch.randint(0, noise_scheduler.config.num_train_timesteps, (args.train_batch_size, ))
-        target_noise = torch.randn((args.train_batch_size, 4, 64, 64), dtype=weight_dtype)
-        subject_noise = torch.randn((1, 4, 64, 64), dtype=weight_dtype)
-        
+        if not args.with_staged_timestep:
+            timesteps = torch.randint(0, 1000, (args.train_batch_size, ))
+        else:
+            # some training hyperparams
+            timesteps = []
+            for example in examples: # following anydoor [0 ... High Res ... T/2 ... Low Res ... T]
+                if example["dataset_name"] in ["vitonHD", "youtubeVIS", "coco2014"]: # low quality for the early stages 
+                    timesteps.append(min(random.randint(int(noise_scheduler.config.num_train_timesteps // 3), noise_scheduler.config.num_train_timesteps - 1), 999))
+                else:
+                    t = random.randint(0, int(2 * noise_scheduler.config.num_train_timesteps // 3 - 1))
+                    timesteps.append(min(t, 999))
+            
+            timesteps = torch.tensor(timesteps).reshape((args.train_batch_size,))
+
+        target_noise = torch.randn((args.train_batch_size, 4, args.resolution // 8, args.resolution // 8), dtype=weight_dtype)
+        subject_noise = torch.randn((1, 4, args.resolution // 8, args.resolution // 8), dtype=weight_dtype)
         target_prompt = [example["target_prompt"] for example in examples]
         subject_prompt = [example["subject_prompt"] for example in examples]
-        
-        return {"target_image": target_image, "input_ids": input_ids, "subject_input_ids": subject_input_ids, "subject_images": subject_images, "padding_num": padding_nums, "dataset_name": examples[0]["dataset_name"], "timestep": timestep, "target_prompt": target_prompt, "subject_prompt": subject_prompt, "target_noise": target_noise, "subject_noise": subject_noise}
+        return {"target_image": target_image, "input_ids": input_ids,  "subject_input_ids": subject_input_ids, "subject_images": subject_images, "padding_num": padding_nums, "dataset_name": [example["dataset_name"] for example in examples], "timesteps": timesteps, "target_prompt": target_prompt, "subject_prompt": subject_prompt, "target_noise": target_noise, "subject_noise": subject_noise}
     
     # DataLoaders creation:
     train_dataloader = torch.utils.data.DataLoader(
@@ -771,7 +804,7 @@ def main(config_path=None, config_file=None):
             target_image = batch["target_image"].to(weight_dtype)
             target_input_ids = batch["input_ids"]
             target_noise = batch['target_noise']
-            target_timestep = batch['timestep']
+            target_timestep = batch['timesteps']
             padding_nums = batch['padding_num']
             target_timestep = target_timestep.long()
             
@@ -874,31 +907,31 @@ def main(config_path=None, config_file=None):
                 accelerator.log({"train_loss": train_loss}, step=global_step)
                 train_loss = 0.0
                 if global_step % args.checkpointing_steps == 0:
-                    if accelerator.is_main_process:
+                    # if accelerator.is_main_process:
                         # _before_ saving state, check if this save would set us overthe`checkpoints_total_limit`
-                        if args.checkpoints_total_limit is not None:
-                            checkpoints = os.listdir(args.output_dir)
-                            checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
-                            checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
-                            # before we save the new checkpoint, we need to have at_most_`checkpoints_total_limit - 1` checkpoints
-                            if len(checkpoints) >= args.checkpoints_total_limit:
-                                num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
-                                removing_checkpoints = checkpoints[0:num_to_remove]
-                                logger.info(
+                    if args.checkpoints_total_limit is not None:
+                        checkpoints = os.listdir(args.output_dir)
+                        checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
+                        checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+                        # before we save the new checkpoint, we need to have at_most_`checkpoints_total_limit - 1` checkpoints
+                        if len(checkpoints) >= args.checkpoints_total_limit:
+                            num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
+                            removing_checkpoints = checkpoints[0:num_to_remove]
+                            logger.info(
                                         f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
-                                )
-                                logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
-                                for removing_checkpoint in removing_checkpoints:
+                            )
+                            logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
+                            for removing_checkpoint in removing_checkpoints:
                                     removing_checkpoint = os.path.join(args.output_dir,removing_checkpoint)
                                     shutil.rmtree(removing_checkpoint)
                                         
-                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                    save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                         
-                        accelerator.save_state(save_path)
-                        resumed = False
-                        # accelerator.save_model(main_unet, save_path)
-                        # save_random_state(os.path.join(save_path, "random_states_0.pth"))
-                        logger.info(f"Saved state to {save_path}")
+                    accelerator.save_state(save_path)
+                    resumed = False
+                    # accelerator.save_model(main_unet, save_path)
+                    # save_random_state(os.path.join(save_path, "random_states_0.pth"))
+                    logger.info(f"Saved state to {save_path}")
             
                 logs = {"step_loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
                 progress_bar.set_postfix(**logs)

@@ -13,6 +13,8 @@ import numpy as np
 from PIL import Image
 import math
 import torch
+import inspect
+from diffusers.image_processor import PipelineImageInput, VaeImageProcessor
 import gc
 import torch.nn.functional as F
 from scipy.ndimage import zoom
@@ -34,10 +36,32 @@ import matplotlib.pyplot as plt
 attn_maps = {}
 import torch.nn as nn
 import clip
-
+from scipy.ndimage import gaussian_filter
 import numpy as np
 import torch 
 import cv2
+
+def create_soft_mask(binary_mask, sigma=1):
+    """
+    将二值掩码转换为软掩码。
+
+    参数:
+    - binary_mask: numpy.ndarray，二值掩码，前景为1，背景为0。
+    - sigma: float，高斯模糊的标准偏差，控制软化程度。
+
+    返回:
+    - soft_mask: numpy.ndarray，软化后的掩码。
+    """
+    # 确保输入是浮点类型以应用高斯滤波
+    binary_mask = binary_mask.astype(np.float32)
+    
+    # 使用高斯滤波生成软掩码
+    soft_mask = gaussian_filter(binary_mask, sigma=sigma)
+    
+    # 归一化到 [0, 1] 范围
+    soft_mask = (soft_mask - soft_mask.min()) / (soft_mask.max() - soft_mask.min())
+    
+    return soft_mask
 
 
 def mask_score(mask):
@@ -791,6 +815,23 @@ def generate_attn_masks_for_each_block(masks_origin, pure_cross=False, device="c
     
     return mask_for_each_block
 
+def prepare_extra_step_kwargs(generator, eta, scheduler):
+        # prepare extra kwargs for the scheduler step, since not all schedulers have the same signature
+        # eta (η) is only used with the DDIMScheduler, it will be ignored for other schedulers.
+        # eta corresponds to η in DDIM paper: https://arxiv.org/abs/2010.02502
+        # and should be between [0, 1]
+
+        accepts_eta = "eta" in set(inspect.signature(scheduler.step).parameters.keys())
+        extra_step_kwargs = {}
+        if accepts_eta:
+            extra_step_kwargs["eta"] = eta
+
+        # check if the scheduler accepts generator
+        accepts_generator = "generator" in set(inspect.signature(scheduler.step).parameters.keys())
+        if accepts_generator:
+            extra_step_kwargs["generator"] = generator
+        return extra_step_kwargs
+
 def add_noise_to_image(noise_step, args, img: PIL.Image, vae, train_transforms, noise=None, noise_scheduler=None):
     """
     takes image path and noise step as input.
@@ -1181,6 +1222,28 @@ def resize_image_to_fit_short(image, short_size=512):
     return resized_image
 
 
+def decode_latent(ref_sample, vae, image_processor):
+    """
+    decode from vae space, input the latent after multiply vae scale factor
+    """
+    has_latents_mean = hasattr(vae.config, "latents_mean") and vae.config.latents_mean is not None
+    has_latents_std = hasattr(vae.config, "latents_std") and vae.config.latents_std is not None
+    if has_latents_mean and has_latents_std:
+        ref_sample_mean = (
+                torch.tensor(vae.config.latents_mean).view(1, 4, 1, 1).to(ref_sample.device, ref_sample.dtype)
+            )
+        ref_sample_std = (
+                torch.tensor(vae.config.latents_std).view(1, 4, 1, 1).to(ref_sample.device, ref_sample.dtype)
+            )
+        ref_sample = ref_sample * ref_sample_std / vae.config.scaling_factor + ref_sample_mean
+    else:
+        ref_sample = ref_sample / vae.config.scaling_factor
+
+    image = vae.decode(ref_sample.to(vae.dtype), return_dict=False)[0]
+    image = image_processor.postprocess(image, output_type="pil")        
+
+    return image
+
 def extract_subject_features(args, image_paths, reference_unet, text_encoder, tokenizer, vae, noise_scheduler, subject_noise, weight_dtype, transforms, text="", device="cuda:0", subject_denoise_timestep = None, generator=None):
 
     references = []
@@ -1220,7 +1283,9 @@ def extract_subject_features(args, image_paths, reference_unet, text_encoder, to
     return subject_features
 
 
-def extract_subject_features_sdxl(args, image_paths, reference_unet, text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, vae, noise_scheduler, subject_noise, weight_dtype, transforms, text="", device="cuda:0", subject_denoise_timestep = None, generator=None):
+
+
+def extract_subject_features_sdxl(args, image_paths, reference_unet, text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, vae, noise_scheduler, subject_noise, weight_dtype, transforms, text="", device="cuda:0", subject_denoise_timestep = None, generator=None, visualize_denoised=False):
 
     references = []
     # image_paths to references
@@ -1242,35 +1307,53 @@ def extract_subject_features_sdxl(args, image_paths, reference_unet, text_encode
     inputs_one = inputs_one[:, None, :]
     inputs_two = inputs_two[:, None, :]
     
-    subject_encoder_hidden_states = text_encoder_one(inputs_one.to(reference_unet.device), return_dict=False)[0]
+    subject_encoder_hidden_states = text_encoder_one(inputs_one.to(reference_unet.device), return_dict=False)[0].to(weight_dtype)
     subject_pooled_prompt_embeds, subject_encoder_hidden_states_two = text_encoder_two(inputs_two.to(reference_unet.device), return_dict=False)
-    subject_encoder_hidden_states = torch.cat((subject_encoder_hidden_states, subject_encoder_hidden_states_two), dim=-1)
-    subject_pooled_prompt_embeds = subject_pooled_prompt_embeds.view(subject_pooled_prompt_embeds.shape[0], -1)
+    subject_encoder_hidden_states = torch.cat((subject_encoder_hidden_states, subject_encoder_hidden_states_two), dim=-1).to(weight_dtype)
+    subject_pooled_prompt_embeds = subject_pooled_prompt_embeds.view(subject_pooled_prompt_embeds.shape[0], -1).to(weight_dtype)
     def compute_time_ids(original_size, crops_coords_top_left):
                 # Adapted from pipeline.StableDiffusionXLPipeline._get_add_time_ids
                 target_size = (args.resolution, args.resolution)
                 add_time_ids = list(original_size + crops_coords_top_left + target_size)
-                add_time_ids = torch.tensor([add_time_ids], device=subject_encoder_hidden_states_two.device, dtype=subject_encoder_hidden_states_two.dtype)
+                add_time_ids = torch.tensor([add_time_ids], device=subject_encoder_hidden_states_two.device, dtype=subject_encoder_hidden_states_two.dtype).to(weight_dtype)
                 return add_time_ids
-    subject_add_time_ids = torch.cat([compute_time_ids(s, c) for s, c in zip([(1024, 1024) for i in range(subject_pooled_prompt_embeds.shape[0])], [(0, 0) for i in range(subject_pooled_prompt_embeds.shape[0])])])
+    subject_add_time_ids = torch.cat([compute_time_ids(s, c) for s, c in zip([(1024, 1024) for i in range(subject_pooled_prompt_embeds.shape[0])], [(0, 0) for i in range(subject_pooled_prompt_embeds.shape[0])])]).to(weight_dtype)
     
     reference_unet_unet_added_conditions = {"time_ids": subject_add_time_ids}
     reference_unet_unet_added_conditions.update({"text_embeds": subject_pooled_prompt_embeds})
     
-    subject_denoise_timestep = torch.tensor(subject_denoise_timestep, device=reference_unet.device).repeat(references.shape[0])
+    subject_denoise_timestep = torch.tensor(subject_denoise_timestep, device=reference_unet.device).repeat(references.shape[0]).to(weight_dtype)
     subject_denoise_timestep = subject_denoise_timestep.long()
     # prepare references from unet, convert images to latent space
-
-    comp_latents = vae.encode(references.to(weight_dtype).to(reference_unet.device)).latent_dist.sample()
+    
+    comp_latents = vae.encode(references.to(weight_dtype).to(reference_unet.device)).latent_dist.sample().to(weight_dtype)
     comp_latents = comp_latents * vae.config.scaling_factor
     
-    subject_noise = torch.randn_like(comp_latents[:1, :, :, :]) # tensor(115.0338, device='cuda:0')
+    subject_noise = torch.randn_like(comp_latents[:1, :, :, :]).to(weight_dtype) # tensor(115.0338, device='cuda:0')
 
-    noisy_comp_latents = noise_scheduler.add_noise(comp_latents, subject_noise, subject_denoise_timestep) # tensor(868.9863, device='cuda:0')
+    noisy_comp_latents = noise_scheduler.add_noise(comp_latents, subject_noise, subject_denoise_timestep).to(weight_dtype) # tensor(868.9863, device='cuda:0')
     # subject_features: [Block1 features for 10 ref img, Block2, ...,Block16]
     ref_sample, subject_features = reference_unet(noisy_comp_latents, subject_denoise_timestep, subject_encoder_hidden_states, added_cond_kwargs=reference_unet_unet_added_conditions, return_dict=False, args=args)
-    subject_features = [block_feat.reshape(1, -1, block_feat.shape[-1]) if block_feat is not None else None for block_feat in subject_features] # B, sub_image_patches, dim 
+
+    subject_features = [block_feat.reshape(1, -1, block_feat.shape[-1]).to(weight_dtype) if block_feat is not None else None for block_feat in subject_features] # B, sub_image_patches, dim 
     
+    
+
+    if visualize_denoised:
+        vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
+        image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
+        extra_step_kwargs = prepare_extra_step_kwargs(generator, 0.0, noise_scheduler)
+        noise_scheduler.set_timesteps(1000, device=device)
+        ref_sample = noise_scheduler.step(ref_sample, torch.tensor(subject_denoise_timestep), noisy_comp_latents.to(weight_dtype), **extra_step_kwargs, return_dict=False)[0]
+
+        deoised_ref_image = decode_latent(ref_sample, vae, image_processor)[0]
+        clean_ref_image = decode_latent(comp_latents, vae, image_processor)[0]
+        noised_ref_image = decode_latent(noisy_comp_latents, vae, image_processor)[0]
+
+        deoised_ref_image.save("deoised_ref_image.png")
+        clean_ref_image.save("clean_ref_image.png")
+        noised_ref_image.save("noised_ref_image.png")
+
     return subject_features
 
 

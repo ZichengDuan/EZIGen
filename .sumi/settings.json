@@ -4,5 +4,11 @@
   "codeRewrite.enabled": false,
   "aoneCopilot.smartInsert.enabled": false,
   "aoneCopilot.quickFix.enabled": false,
-  "debugpy.debugJustMyCode": false
+  "debugpy.debugJustMyCode": false,
+  "editor.wordWrap": "on",
+  "editor.tabSize": 4,
+  "explorer.autoReveal": false,
+  "editor.hover.enabled": false,
+  "editor.hover.above": false,
+  "terminal.fontSize": 12
 }

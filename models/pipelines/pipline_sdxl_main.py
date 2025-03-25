@@ -11,10 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+from math import e
+import torch.nn.functional as F
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import copy
+from utils import create_soft_mask
 import torch
 from transformers import (
     CLIPImageProcessor,
@@ -876,7 +878,10 @@ class StableDiffusionXLPipeline_main(
         subject_features=None,
         args = None,
         latents_steps=0,
-        denoise_step=None,
+        threshold_timestep=None,
+        foreground_mask = None,
+        inversed_intermediate_latents=None,
+        inference_attn_mask=None,
         **kwargs,
     ):
         r"""
@@ -1162,9 +1167,15 @@ class StableDiffusionXLPipeline_main(
             negative_add_time_ids = add_time_ids
 
         if self.do_classifier_free_guidance:
-            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-            add_text_embeds = torch.cat([negative_pooled_prompt_embeds, add_text_embeds], dim=0)
-            add_time_ids = torch.cat([negative_add_time_ids, add_time_ids], dim=0)
+            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0) # CFG
+            add_text_embeds = torch.cat([negative_pooled_prompt_embeds, add_text_embeds], dim=0) # dzc
+            add_time_ids = torch.cat([negative_add_time_ids, add_time_ids], dim=0) # dzc
+
+            try:
+                if args.remove_add_text_emb:
+                    add_text_embeds = torch.zeros_like(add_text_embeds)
+            except:
+                pass
 
         prompt_embeds = prompt_embeds.to(device)
         add_text_embeds = add_text_embeds.to(device)
@@ -1205,13 +1216,29 @@ class StableDiffusionXLPipeline_main(
 
         self._num_timesteps = len(timesteps)
         
+
+        # # # # # prepare mask
+        if args.do_editing and foreground_mask is not None and args.skip_adapter_ratio != 1: 
+            foreground_mask = foreground_mask.to(latents.dtype)
+            
+            foreground_mask = F.interpolate(foreground_mask[None, None, :, :], latents.shape[2:], mode='bilinear').repeat(1, 4, 1, 1)
+            background_mask = 1 - foreground_mask
+        else:
+            foreground_mask = torch.ones_like(latents, dtype=latents.dtype)
+            background_mask = torch.zeros_like(latents, dtype=latents.dtype)
+        
+        if inversed_intermediate_latents is not None:
+            inversed_intermediate_latents = inversed_intermediate_latents[::-1]
+
         latents = latents.to(self.vae.dtype)
+        skipped_steps = 0
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                
-                if denoise_step is not None and denoise_step < t:
+                # for multiple types of scheduler
+                if threshold_timestep is not None and threshold_timestep < t:
                     if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                         progress_bar.update()
+                    skipped_steps += 1
                     continue
                 
                 if subject_features is not None:
@@ -1242,9 +1269,9 @@ class StableDiffusionXLPipeline_main(
                     return_dict=False,
                     subject_feats=references_loop,
                     inf_timestep=i,
-                    args = args
+                    args = args,
+                    training_attn_mask = inference_attn_mask
                 )[0]
-                
                 # perform guidance
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
@@ -1261,6 +1288,10 @@ class StableDiffusionXLPipeline_main(
                     if torch.backends.mps.is_available():
                         # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272
                         latents = latents.to(latents_dtype)
+                
+                # breakpoint()
+                if inversed_intermediate_latents is not None and foreground_mask is not None and args.skip_adapter_ratio != 1:
+                    latents =  latents * foreground_mask + inversed_intermediate_latents[i - skipped_steps + 1] * background_mask
 
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
@@ -1283,10 +1314,11 @@ class StableDiffusionXLPipeline_main(
                 if XLA_AVAILABLE:
                     xm.mark_step()
 
+        
         if not output_type == "latent":
+        # # dzc: don't upcast
             # make sure the VAE is in float32 mode, as it overflows in float16
-            needs_upcasting = self.vae.dtype == torch.float16 and self.vae.config.force_upcast
-
+            needs_upcasting = self.vae.dtype == torch.float16 and self.vae.config.force_upcast and args.vae_path is None
             if needs_upcasting:
                 self.upcast_vae()
                 latents = latents.to(next(iter(self.vae.post_quant_conv.parameters())).dtype)
@@ -1309,8 +1341,6 @@ class StableDiffusionXLPipeline_main(
                 latents = latents * latents_std / self.vae.config.scaling_factor + latents_mean
             else:
                 latents = latents / self.vae.config.scaling_factor
-            # breakpoint()
-            
             image = self.vae.decode(latents.to(self.vae.dtype), return_dict=False)[0]
 
             # cast back to fp16 if needed
