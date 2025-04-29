@@ -1321,19 +1321,19 @@ def extract_subject_features_sdxl(args, image_paths, reference_unet, text_encode
     
     reference_unet_unet_added_conditions = {"time_ids": subject_add_time_ids}
     reference_unet_unet_added_conditions.update({"text_embeds": subject_pooled_prompt_embeds})
-    
+
     subject_denoise_timestep = torch.tensor(subject_denoise_timestep, device=reference_unet.device).repeat(references.shape[0]).to(weight_dtype)
     subject_denoise_timestep = subject_denoise_timestep.long()
     # prepare references from unet, convert images to latent space
     
-    comp_latents = vae.encode(references.to(weight_dtype).to(reference_unet.device)).latent_dist.sample().to(weight_dtype)
-    comp_latents = comp_latents * vae.config.scaling_factor
+    comp_latents = vae.encode(references.to(weight_dtype).to(reference_unet.device)).latent_dist.sample().to(weight_dtype) # tensor(1586638.5000)
+    comp_latents = comp_latents * vae.config.scaling_factor  # edit: 13016
     
     subject_noise = torch.randn_like(comp_latents[:1, :, :, :]).to(weight_dtype) # tensor(115.0338, device='cuda:0')
 
-    noisy_comp_latents = noise_scheduler.add_noise(comp_latents, subject_noise, subject_denoise_timestep).to(weight_dtype) # tensor(868.9863, device='cuda:0')
+    noisy_comp_latents = noise_scheduler.add_noise(comp_latents, subject_noise, subject_denoise_timestep).to(weight_dtype) # edit: 1228
     # subject_features: [Block1 features for 10 ref img, Block2, ...,Block16]
-    ref_sample, subject_features = reference_unet(noisy_comp_latents, subject_denoise_timestep, subject_encoder_hidden_states, added_cond_kwargs=reference_unet_unet_added_conditions, return_dict=False, args=args)
+    ref_sample, subject_features = reference_unet(noisy_comp_latents, subject_denoise_timestep, subject_encoder_hidden_states, added_cond_kwargs=reference_unet_unet_added_conditions, return_dict=False, args=args) 
 
     subject_features = [block_feat.reshape(1, -1, block_feat.shape[-1]).to(weight_dtype) if block_feat is not None else None for block_feat in subject_features] # B, sub_image_patches, dim 
     

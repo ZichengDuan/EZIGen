@@ -17,7 +17,7 @@ else:
     device = "cpu"
 
 def partial_inverse_xl(threshold_timestep, img: PIL.Image, pipe, unet=None, save_decoded=False, num_inference_steps=20):
-    prompt_str = "a cowboy riding a robotic horse."
+    prompt_str = ""
     outputs = pipe(
         prompt_str, 
         guidance_scale=1,
@@ -29,20 +29,22 @@ def partial_inverse_xl(threshold_timestep, img: PIL.Image, pipe, unet=None, save
     
     noise_image, noise, decode_image, inversed_intermediate_latents = outputs["images"][0], outputs["noise"][0], outputs["decode_images"][0], outputs["inversed_intermediate_latents"]
     
-    if save_decoded and unet:
-        denoise_pipe = StableDiffusionPipelinePartial.from_pretrained("hf_models/stabilityai--stable-diffusion-xl-base-1.0", text_encoder=exclip, local_files_only=True).to("cuda:0")
-        denoise_pipe.unet = unet
+    if save_decoded:
+        denoise_pipe = StableDiffusionXLPipeline_main.from_pretrained("stabilityai/stable-diffusion-xl-base-1.0").to(device)
+        denoise_pipe.scheduler = DDIMScheduler.from_config(denoise_pipe.scheduler.config)
+        
+        denoise_pipe.unet = pipe.unet
         pipe.scheduler = DDPMScheduler.from_config(pipe.scheduler.config, local_files_only=True)
         outputs = denoise_pipe(
             prompt_str, 
             guidance_scale=1,
             num_inference_steps=num_inference_steps,
             latents=noise.unsqueeze(0),
-            noise_step=noise_step
+            noise_step=threshold_timestep
         ) 
         recon_image = outputs["images"][0]
         recon_image.save(f"adapter_recon.jpg")
-    
+        breakpoint()
     return noise.unsqueeze(0), inversed_intermediate_latents
 
 

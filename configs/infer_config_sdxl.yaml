@@ -1,14 +1,14 @@
 # checkpoint name
-pretrained_model_name_or_path: hf_models/stabilityai--stable-diffusion-xl-base-1.0
-clip_path: hf_models/ViT-B-32.pt # or simply "ViT-B/32" and let transformers module do its job
+pretrained_model_name_or_path: stabilityai/stable-diffusion-xl-base-1.0
+clip_path: ViT-B/32 # or simply "ViT-B/32" and let transformers module do its job
 output_dir: experiments/train/train_sdxl
-vae_path: /mnt/workspace/workgroup/duanzicheng.dzc/hf_models/madebyollin--sdxl-vae-fp16-fix
+vae_path: madebyollin/sdxl-vae-fp16-fix
 
 # checkpoint_path: experiments/staged_training/checkpoint-39790 # e.g. checkpoint-200000
 # checkpoint_path: prev_exp/train/train_sdxl_more_data/checkpoint-39790 # e.g. checkpoint-200000
 # checkpoint_path: prev_exp/train/train_sdxl/checkpoint-9200 # e.g. checkpoint-200000
 # checkpoint_path: /root/debug_ckpt/checkpoint-24000 # e.g. checkpoint-200000
-checkpoint_path: /mnt/workspace/workgroup/duanzicheng.dzc/checkpoints/ezigen/train/train_sdxl_staged_timesteps_more_data_fp16/checkpoint-28000/diffusion_pytorch_model.bin # e.g. checkpoint-200000
+checkpoint_path: experiments/trained_sdxl/diffusion_pytorch_model.bin # e.g. checkpoint-200000
 # checkpoint_path: /mnt/workspace/workgroup/duanzicheng.dzc/checkpoints/ezigen/debug/fp16_ckpt/diffusion_pytorch_model.bin # e.g. checkpoint-200000
 
 # system defaults, !no need to change anything here!
@@ -19,7 +19,6 @@ subject_denoise_timestep: 1
 add_before_ca: true
 sub_feat_position: "before_sa"
 insert_adapter_at: all
-infer_mode: true
 gradient_accumulation_steps: 1
 revision: null
 non_ema_revision: null

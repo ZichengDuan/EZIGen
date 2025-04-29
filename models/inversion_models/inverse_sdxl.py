@@ -152,53 +152,62 @@ def inverse_sdxl(args):
 
 
 def inverse_sdxl_partial(args):
-    exclip = ExceptionCLIPTextModel.from_pretrained(args.model_path, subfolder="text_encoder").to(device)
-    exclip_2 = ExceptionCLIPTextModelWithProj.from_pretrained(args.model_path, subfolder="text_encoder_2").to(device)
+    args.do_editing = True
+    args.add_before_ca = True
+    args.skip_adapter_ratio = 1
+    args.infer_steps = args.num_inference_steps
+    args.residual_connection = True
+    
+    # exclip = ExceptionCLIPTextModel.from_pretrained(args.model_path, subfolder="text_encoder").to(device)
+    # exclip_2 = ExceptionCLIPTextModelWithProj.from_pretrained(args.model_path, subfolder="text_encoder_2").to(device)
     pipe = InversePipelineXLPartial.from_pretrained(args.model_path).to(device)
-    # pipe.scheduler = DDIMInverseScheduler.from_config(pipe.scheduler.config)
-    pipe.scheduler = DPMSolverMultistepInverseScheduler.from_config(pipe.scheduler.config)
+    pipe.scheduler = DDIMInverseScheduler.from_config(pipe.scheduler.config)
+    # pipe.scheduler = DPMSolverMultistepInverseScheduler.from_config(pipe.scheduler.config)
     
     denoise_pipe = StableDiffusionXLPipeline_main.from_pretrained(args.model_path).to(device)
     denoise_pipe.scheduler = DDIMScheduler.from_config(denoise_pipe.scheduler.config)
     
 
-    image = Image.open(args.input_image).resize((1024,1024), Image.Resampling.LANCZOS).convert("RGB")
+    image = Image.open(args.input_image).resize((1024,1024), Image.Resampling.LANCZOS).convert("RGB")  
+    
+    # pipe.unet = main_unet
+    pipe.args = args
+    pipe.to(device)
     
     threshold_timestep = args.split_ratio * 1000
     prompt_str = ""
-
+    
     outputs = pipe(
         prompt_str, 
-        guidance_scale=10,
+        guidance_scale=1,
         num_inference_steps=args.num_inference_steps,
         image=image,
         threshold_timestep=threshold_timestep,
         # output_type="latent",
     )
     
+    
     noise_image, noise, decode_image, inversed_intermediate_latents = outputs["images"][0], outputs["noise"][0], outputs["decode_images"][0], outputs["inversed_intermediate_latents"]
     print(noise.mean(), noise.std())
 
     noise_image.save(args.results_folder + "noisy_image_partial2.jpg")
 
-
-    args.do_editing = True
-    args.add_before_ca = True
-    args.skip_adapter_ratio = 1
-    args.infer_steps = args.num_inference_steps
-    args.residual_connection = True
-
+    args.skip_adapter_ratio = 0
     denoise_pipe.args = args
-
+    
+    # load main unet and its adapters
     main_unet = UNet2DConditionModel_main.from_pretrained(args.model_path, subfolder="unet", local_files_only=True).to(device)
     register_adapter_and_configs(main_unet, reference_unet=None, args=args)
+    
+    state_dict = torch.load("experiments/trained_sdxl/diffusion_pytorch_model.bin", map_location="cpu")
+    main_unet.load_state_dict(state_dict, strict=False)
+    
     denoise_pipe.unet = main_unet
     denoise_pipe.to(device)
-    breakpoint()
-    prompt_str = "a cowboy riding a robotic horse."
+    prompt_str = ""
     outputs = denoise_pipe(
         prompt_str, 
-        guidance_scale=10,
+        guidance_scale=2,
         num_inference_steps=args.num_inference_steps,
         latents=noise.unsqueeze(0),
         inversed_intermediate_latents=inversed_intermediate_latents if args.do_editing else None,
@@ -210,11 +219,11 @@ def inverse_sdxl_partial(args):
 
 def arg_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input_image', type=str, default='example_images/source_images_with_masks/cowboy_horse.png')
+    parser.add_argument('--input_image', type=str, default='example_images/source_images_with_masks/dog_car.png')
     parser.add_argument('--results_folder', type=str, default='outputs/')
     parser.add_argument('--num_inference_steps', type=int, default=20)
-    parser.add_argument('--split_ratio', type=int, default=1)
-    parser.add_argument('--model_path', type=str, default="hf_models/stabilityai--stable-diffusion-xl-base-1.0")
+    parser.add_argument('--split_ratio', type=int, default=0.8)
+    parser.add_argument('--model_path', type=str, default="stabilityai/stable-diffusion-xl-base-1.0")
     parser.add_argument('--config', type=str, default="")
     args = parser.parse_args()
 

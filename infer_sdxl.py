@@ -67,7 +67,7 @@ from models.reference_unet.unet_ref import UNet2DConditionModel_ref
 from models.main_unet.adapter import Attention_Adapter  # my model
 from models.pipelines.pipline_sd_main import StableDiffusionPipeline_main
 from models.pipelines.pipline_sdxl_main import StableDiffusionXLPipeline_main
-from models.inversion_models.sdxl_inversions.pnp_pipeline import SDXLDDIMPipeline, SDXLDDIMPipeline_partial
+# from models.inversion_models.sdxl_inversions.pnp_pipeline import SDXLDDIMPipeline, SDXLDDIMPipeline_partial
 
 
 transformers_logging.set_verbosity_error()
@@ -97,7 +97,7 @@ def load_clip_model(device):
     return model, preprocess
 
 
-def loop_infer(args, subject_img_paths, subject_features, vae, noise_scheduler, weight_dtype, target_prompt, subject_prompts, train_transforms, generator, init_image, sim_threshold=0.98, pipeline=None, output_root=None, post_fix=None, reference_unet=None, exclip=None, inverse_pipeline=None, main_unet=None, clip_model=None, clip_processor=None, foreground_mask=None, initial_image_size = None, source_image_path=None, inference_attn_mask=None):
+def loop_infer(args, subject_img_paths, subject_features, vae, infer_noise_scheduler, weight_dtype, target_prompt, subject_prompts, train_transforms, generator, init_image, sim_threshold=0.98, pipeline=None, output_root=None, post_fix=None, reference_unet=None, exclip=None, inverse_pipeline=None, main_unet=None, clip_model=None, clip_processor=None, foreground_mask=None, initial_image_size = None, source_image_path=None, inference_attn_mask=None):
     """
     input: 
     """
@@ -120,10 +120,10 @@ def loop_infer(args, subject_img_paths, subject_features, vae, noise_scheduler, 
         sim_threshold = 1
     
     # calculate the add noise/inversion steps
-    infer_discrete_timesteps, num_inf_steps = retrieve_timesteps(noise_scheduler, args.infer_steps, device, None, None)
+    infer_discrete_timesteps, num_inf_steps = retrieve_timesteps(infer_noise_scheduler, args.infer_steps, device, None, None)
     infer_discrete_timesteps = infer_discrete_timesteps.cpu().numpy().tolist()
 
-    noise_step = split_ratio * noise_scheduler.config.num_train_timesteps
+    noise_step = split_ratio * infer_noise_scheduler.config.num_train_timesteps
     threshold_timestep = min(filter(lambda x: x <= noise_step, infer_discrete_timesteps), key=lambda x: abs(x - noise_step)) # 找到最近且小的值
 
     # find the index in timesteps and calculate how many are skiped 
@@ -135,20 +135,18 @@ def loop_infer(args, subject_img_paths, subject_features, vae, noise_scheduler, 
 
     while ((cur_loop_num < max_num_loop and sim < sim_threshold) or cur_loop_num < min_num_loop):
         
-        noisy_latents = add_noise_to_image(noise_step = threshold_timestep, args=args, img=loop_image, vae=vae, train_transforms=train_transforms, noise_scheduler=noise_scheduler)
+        noisy_latents = add_noise_to_image(noise_step = threshold_timestep, args=args, img=loop_image, vae=vae, train_transforms=train_transforms, noise_scheduler=infer_noise_scheduler)
 
         if args.do_editing:
             # to obtain backgrounds
-            outs = inverse_pipeline(prompt = target_prompt, image = loop_image, num_inference_steps=args.infer_steps, guidance_scale = 1, threshold_timestep=threshold_timestep)
-            inversed_noisy_latents, inversed_intermediate_latents = outs['images'], outs['intermediate_inversed_latents']
-
-            # inversed_noisy_latents, inversed_intermediate_latents = partial_inverse_xl(threshold_timestep, loop_image, inverse_pipeline, save_decoded=False, num_inference_steps=args.infer_steps)
+            # outs = inverse_pipeline(prompt = target_prompt, image = loop_image, num_inference_steps=args.infer_steps, guidance_scale = 1, threshold_timestep=threshold_timestep)
+            # inversed_noisy_latents, inversed_intermediate_latents = outs['latents'], outs['inversed_intermediate_latents']
+            inversed_noisy_latents, inversed_intermediate_latents = partial_inverse_xl(threshold_timestep, loop_image, inverse_pipeline, save_decoded=False, num_inference_steps=args.infer_steps)
             # replaced the to-edit area with noisy latents
             # foreground_mask_edit = F.interpolate(foreground_mask.unsqueeze(0).unsqueeze(0), size=noisy_latents.shape[-2:])
             # noisy_latents = foreground_mask_edit * noisy_latents + (1 - foreground_mask_edit) * inversed_intermediate_latents[-1]
 
             noisy_latents = inversed_noisy_latents
-
             if original_inversed_intermediate_latents is None:
                 original_inversed_intermediate_latents = inversed_intermediate_latents
             else:
@@ -210,7 +208,7 @@ def loop_infer(args, subject_img_paths, subject_features, vae, noise_scheduler, 
     return loop_image
 
 
-def iteration_wrapper(args, accelerator, subject_img_paths, main_unet, reference_unet, text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, vae,  noise_scheduler, weight_dtype, target_prompt, subject_prompts, train_transforms, generator=None, output_root=None, post_fix="", pipeline=None, exclip=None, inverse_pipeline=None, clip_model=None, clip_processor=None, source_image_path=None, foreground_mask_path=None, inference_attn_mask=None):
+def iteration_wrapper(args, accelerator, subject_img_paths, main_unet, reference_unet, text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, vae, infer_noise_scheduler, add_noise_scheduler, weight_dtype, target_prompt, subject_prompts, train_transforms, generator=None, output_root=None, post_fix="", pipeline=None, exclip=None, inverse_pipeline=None, clip_model=None, clip_processor=None, source_image_path=None, foreground_mask_path=None, inference_attn_mask=None):
     """
     1. load load prompts and ref image features
     2. initial loop, gte the initial image and hard masks (all)
@@ -222,8 +220,7 @@ def iteration_wrapper(args, accelerator, subject_img_paths, main_unet, reference
         iv: 
     """
     # load all subject feature
-    subject_features  = extract_subject_features_sdxl(args, subject_img_paths, reference_unet, text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, vae,  noise_scheduler, None,  weight_dtype, train_transforms, text=subject_prompts, subject_denoise_timestep=args.subject_denoise_timestep, device=reference_unet.device, generator=generator.manual_seed(int(args.seed)), visualize_denoised=False)
-
+    subject_features  = extract_subject_features_sdxl(args, subject_img_paths, reference_unet, text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, vae,  add_noise_scheduler, None,  weight_dtype, train_transforms, text=subject_prompts, subject_denoise_timestep=args.subject_denoise_timestep, device=reference_unet.device, generator=generator.manual_seed(int(args.seed)), visualize_denoised=False)
     # reshape subject feature for CFG, use a dummy input for CFG unconditional batch
     if subject_features[0].ndim == 2:
         for i in range(len(subject_features)):
@@ -236,7 +233,7 @@ def iteration_wrapper(args, accelerator, subject_img_paths, main_unet, reference
     generator.manual_seed(int(args.seed))
     # latents = torch.load("outputs/DDIM_inversion_normal_horse_full_step.pt")
     latents = None
-    res = pipeline(target_prompt, 
+    res = pipeline(target_prompt,
                     num_inference_steps=args.infer_steps,
                     generator=generator,
                     subject_features = subject_features, 
@@ -334,7 +331,7 @@ def iteration_wrapper(args, accelerator, subject_img_paths, main_unet, reference
     
     # start interation after decoupling operation
     args.skip_adapter_ratio = 0
-    final_image = loop_infer(args, subject_img_paths, subject_features, vae, noise_scheduler, weight_dtype, target_prompt, subject_prompts, train_transforms, generator, initial_image_resized, sim_threshold=args.sim_threshold, pipeline=pipeline, output_root=output_root, post_fix=post_fix, reference_unet=reference_unet, exclip=exclip, inverse_pipeline=inverse_pipeline, main_unet=main_unet, clip_model=clip_model, clip_processor=clip_processor, foreground_mask=foreground_mask, initial_image_size=(W, H), source_image_path=source_image_path, inference_attn_mask=inference_attn_mask)
+    final_image = loop_infer(args, subject_img_paths, subject_features, vae, infer_noise_scheduler, weight_dtype, target_prompt, subject_prompts, train_transforms, generator, initial_image_resized, sim_threshold=args.sim_threshold, pipeline=pipeline, output_root=output_root, post_fix=post_fix, reference_unet=reference_unet, exclip=exclip, inverse_pipeline=inverse_pipeline, main_unet=main_unet, clip_model=clip_model, clip_processor=clip_processor, foreground_mask=foreground_mask, initial_image_size=(W, H), source_image_path=source_image_path, inference_attn_mask=inference_attn_mask)
     return final_image
 
 
@@ -415,10 +412,11 @@ def load_models(args, weight_type):
     # noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", solver_order=1, algorithm_type="dpmsolver++", local_files_only=True)
     # noise_scheduler = DPMSolverSDEScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True)
     if not args.do_editing:
-        noise_scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True, torch_dtype=weight_type)
+        infer_noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True, torch_dtype=weight_type)
+        add_noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True, torch_dtype=weight_type)
     else:
-        # noise_scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True, torch_dtype=weight_type)
-        noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True, use_karras=True, algorithm_type="sde-dpmsolver++")
+        infer_noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True, torch_dtype=weight_type)
+        add_noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True, torch_dtype=weight_type)
     
     # Load the tokenizers
 
@@ -448,7 +446,7 @@ def load_models(args, weight_type):
     main_unet.requires_grad_(False)
     reference_unet.requires_grad_(False)
 
-    return main_unet, reference_unet, noise_scheduler, tokenizer_one, tokenizer_two, text_encoder_one, text_encoder_two, vae, clip_model, clip_processor
+    return main_unet, reference_unet, infer_noise_scheduler, add_noise_scheduler, tokenizer_one, tokenizer_two, text_encoder_one, text_encoder_two, vae, clip_model, clip_processor
 
 
 def register_adapter_and_configs(main_unet, reference_unet, args):
@@ -512,7 +510,7 @@ def load_checkpoint(accelerator, args):
     accelerator.load_state(args.checkpoint_path)
     
 
-def load_pipelines(vae, main_unet, noise_scheduler, weight_dtype, args):
+def load_pipelines(vae, main_unet, infer_noise_scheduler, weight_dtype, args):
     exclip = ExceptionCLIPTextModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder")
     exclip_2 = ExceptionCLIPTextModelWithProj.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder_2")
     
@@ -530,14 +528,14 @@ def load_pipelines(vae, main_unet, noise_scheduler, weight_dtype, args):
     #     pipeline.text_encoder = exclip
     #     pipeline.text_encoder_2=exclip_2
 
-    pipeline.scheduler = noise_scheduler
+    pipeline.scheduler = infer_noise_scheduler
 
     # inversion pipeline
-    # inverse_pipeline = InversePipelineXLPartial.from_pretrained(args.pretrained_model_name_or_path, text_encoder=exclip, text_encoder_2=exclip_2, local_files_only=True)
+    inverse_pipeline = InversePipelineXLPartial.from_pretrained(args.pretrained_model_name_or_path, vae=vae, local_files_only=True)
     # # inverse_pipeline.scheduler = DPMSolverMultistepInverseScheduler.from_config(inverse_pipeline.scheduler.config, local_files_only=True)
     # inverse_pipeline.scheduler = DDIMInverseScheduler.from_config(inverse_pipeline.scheduler.config)
 
-    inverse_pipeline = SDXLDDIMPipeline_partial.from_pretrained(args.pretrained_model_name_or_path, use_safetensors=True, torch_dtype=weight_dtype).to("cuda")
+    # inverse_pipeline = SDXLDDIMPipeline_partial.from_pretrained(args.pretrained_model_name_or_path, use_safetensors=True, torch_dtype=weight_dtype).to("cuda")
     inverse_pipeline.scheduler = DDIMInverseScheduler.from_config(inverse_pipeline.scheduler.config)
 
     return pipeline, inverse_pipeline
@@ -577,7 +575,7 @@ def main():
         weight_dtype = torch.bfloat16
 
     # load models
-    main_unet, reference_unet, noise_scheduler, tokenizer_one, tokenizer_two, text_encoder_one, text_encoder_two, vae, clip_model, clip_processor = load_models(args, weight_dtype)
+    main_unet, reference_unet, infer_noise_scheduler, add_noise_scheduler, tokenizer_one, tokenizer_two, text_encoder_one, text_encoder_two, vae, clip_model, clip_processor = load_models(args, weight_dtype)
     
     # register adapter to attention blocks
     register_adapter_and_configs(main_unet, reference_unet, args)
@@ -602,8 +600,8 @@ def main():
 
 
     # loading pipelines
-    pipeline, inverse_pipeline = load_pipelines(vae, main_unet, noise_scheduler, weight_dtype, args)
-    inverse_pipeline.to(device)
+    pipeline, inverse_pipeline = load_pipelines(vae, main_unet, infer_noise_scheduler, weight_dtype, args)
+    inverse_pipeline.to(device, dtype=weight_dtype)
     pipeline.to(device, dtype=weight_dtype)
 
     # subject driven generation
@@ -671,7 +669,8 @@ def main():
                 "tokenizer_one": tokenizer_one,
                 "tokenizer_two": tokenizer_two,
                 "vae": vae,
-                "noise_scheduler": noise_scheduler,
+                "infer_noise_scheduler": infer_noise_scheduler,
+                "add_noise_scheduler": add_noise_scheduler,
                 "weight_dtype": weight_dtype,
                 "generator": generator,
                 "pipeline": pipeline,

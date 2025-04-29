@@ -582,7 +582,6 @@ class AttnProcessor2_0_Adapter:
         
         
         query = attn.to_q(hidden_states, *args)
-
         if sub_feat is not None:
             norm_scale = 1
             try:
@@ -613,7 +612,6 @@ class AttnProcessor2_0_Adapter:
         hidden_states = F.scaled_dot_product_attention(
             query, key, value, attn_mask=training_attn_mask, dropout_p=0.0, is_causal=False
         )
-        
         
         # # if use dual_attn, also gather text 
         # # attn 2.X

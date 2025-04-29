@@ -46,6 +46,3 @@ def partial_inverse(noise_step, img: PIL.Image, exclip, pipe, unet=None, save_de
     
     return noise.unsqueeze(0), inversed_intermediate_latents
 
-
-
-

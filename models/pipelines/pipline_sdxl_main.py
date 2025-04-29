@@ -1226,6 +1226,9 @@ class StableDiffusionXLPipeline_main(
         else:
             foreground_mask = torch.ones_like(latents, dtype=latents.dtype)
             background_mask = torch.zeros_like(latents, dtype=latents.dtype)
+            
+        # foreground_mask = torch.ones_like(latents, dtype=latents.dtype)
+        # background_mask = torch.zeros_like(latents, dtype=latents.dtype)
         
         if inversed_intermediate_latents is not None:
             inversed_intermediate_latents = inversed_intermediate_latents[::-1]
@@ -1289,7 +1292,6 @@ class StableDiffusionXLPipeline_main(
                         # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272
                         latents = latents.to(latents_dtype)
                 
-                # breakpoint()
                 if inversed_intermediate_latents is not None and foreground_mask is not None and args.skip_adapter_ratio != 1:
                     latents =  latents * foreground_mask + inversed_intermediate_latents[i - skipped_steps + 1] * background_mask
 

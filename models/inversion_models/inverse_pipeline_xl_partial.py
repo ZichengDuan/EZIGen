@@ -262,7 +262,6 @@ class InversePipelineXLPartial(StableDiffusionXLPipeline):
                 lora_scale=lora_scale,
                 clip_skip=self.clip_skip,
         )
-
         # # For classifier free guidance, we need to do two forward passes.
         # # Here we concatenate the unconditional and text embeddings into a single batch
         # # to avoid doing two forward passes
@@ -284,7 +283,7 @@ class InversePipelineXLPartial(StableDiffusionXLPipeline):
             x0 = torch.from_numpy(x0).permute(2, 0, 1).unsqueeze(dim=0).repeat(1, 1, 1, 1).to(device)
             x0 = (x0 - 0.5) * 2.
             with torch.no_grad():
-                x0_enc = self.vae.encode(x0.float()).latent_dist.sample().to(device)
+                x0_enc = self.vae.encode(x0.to(self.vae.dtype)).latent_dist.sample().to(device)
             latents = x0_enc = self.vae.config.scaling_factor * x0_enc
 
             # Decode and return the image
@@ -336,7 +335,7 @@ class InversePipelineXLPartial(StableDiffusionXLPipeline):
             negative_add_time_ids = add_time_ids
 
         if self.do_classifier_free_guidance:
-            prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+            # prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
             add_text_embeds = torch.cat([negative_pooled_prompt_embeds, add_text_embeds], dim=0)
             add_time_ids = torch.cat([negative_add_time_ids, add_time_ids], dim=0)
 
@@ -385,7 +384,6 @@ class InversePipelineXLPartial(StableDiffusionXLPipeline):
         if not isinstance(self.scheduler, (DDIMInverseScheduler, DPMSolverMultistepInverseScheduler)):
             timesteps = timesteps.flip(0)[1:-1]
 
-
         intermediate_latents = []
         inversed_intermediate_latents = [latents]
         with self.progress_bar(total=num_inference_steps) as progress_bar:
@@ -400,6 +398,7 @@ class InversePipelineXLPartial(StableDiffusionXLPipeline):
 
                 # predict the noise residual
                 added_cond_kwargs = {"text_embeds": add_text_embeds, "time_ids": add_time_ids}
+                # breakpoint()
                 noise_pred = self.unet(
                     latent_model_input,
                     t,

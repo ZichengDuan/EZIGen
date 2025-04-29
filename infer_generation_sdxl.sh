@@ -3,13 +3,13 @@
 python infer_sdxl.py \
     --config configs/infer_config_sdxl.yaml \
     --guidance_scale 7\
-    --seed 283 \
-    --split_ratio 0.7 \
-    --infer_steps 20 \
+    --seed 284 \
+    --split_ratio 0.5 \
+    --infer_steps 50     \
     --sim_threshold 0.99 \
-    --target_prompt "A portrait of a white man wearing a rainbow scarf. master piece, 4k, ultra fine" \
-    --subject_prompt "a man" \
-    --subject_img_path "/mnt/sh_nas/duanzicheng.dzc/Projects/EZIGen/example_images/subjects/000000023_white.png" \
+    --target_prompt "A corgi dog walking in the rain, wearing a top black hat" \
+    --subject_prompt "a corgi dog" \
+    --subject_img_path "example_images/subjects/dog.png" \
     --output_root "outputs/" \
-    --num_interations 7 \
+    --num_interations 3 \
     # --init_img_path "/mnt/sh_nas/duanzicheng.dzc/Projects/EZIGen/example_images/source_images_with_masks/space_dog_chowchow_mask.png"
