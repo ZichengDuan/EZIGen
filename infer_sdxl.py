@@ -413,7 +413,7 @@ def load_models(args, weight_type):
     # noise_scheduler = DPMSolverSDEScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True)
     if not args.do_editing:
         infer_noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True, torch_dtype=weight_type)
-        add_noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True, torch_dtype=weight_type)
+        add_noise_scheduler = DDIMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True, torch_dtype=weight_type)
     else:
         infer_noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True, torch_dtype=weight_type)
         add_noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True, torch_dtype=weight_type)
@@ -532,11 +532,11 @@ def load_pipelines(vae, main_unet, infer_noise_scheduler, weight_dtype, args):
 
     # inversion pipeline
     inverse_pipeline = InversePipelineXLPartial.from_pretrained(args.pretrained_model_name_or_path, vae=vae, local_files_only=True)
-    # # inverse_pipeline.scheduler = DPMSolverMultistepInverseScheduler.from_config(inverse_pipeline.scheduler.config, local_files_only=True)
+    inverse_pipeline.scheduler = DPMSolverMultistepInverseScheduler.from_config(inverse_pipeline.scheduler.config, local_files_only=True)
     # inverse_pipeline.scheduler = DDIMInverseScheduler.from_config(inverse_pipeline.scheduler.config)
 
     # inverse_pipeline = SDXLDDIMPipeline_partial.from_pretrained(args.pretrained_model_name_or_path, use_safetensors=True, torch_dtype=weight_dtype).to("cuda")
-    inverse_pipeline.scheduler = DDIMInverseScheduler.from_config(inverse_pipeline.scheduler.config)
+    # inverse_pipeline.scheduler = DDIMInverseScheduler.from_config(inverse_pipeline.scheduler.config)
 
     return pipeline, inverse_pipeline
 
@@ -629,7 +629,7 @@ def main():
         ]
     )
 
-    # make sure subject feature does not interfere with unconditional generation
+    # # make sure subject feature does not interfere with unconditional generation
     # inference_attn_mask = torch.zeros(1, 2, 2 * 2).to(device)
     # inference_attn_mask[0, 0, - 2:] = -50000.0
     # inference_attn_mask = inference_attn_mask.to(weight_dtype)

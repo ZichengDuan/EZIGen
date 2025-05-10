@@ -1,9 +1,9 @@
 # infer_editing.sh
 python infer_sdxl.py \
     --config configs/infer_config_sdxl.yaml \
-    --guidance_scale 7\
-    --seed 283 \
-    --split_ratio 0.6 \
+    --guidance_scale 10\
+    --seed 285 \
+    --split_ratio 0.8 \
     --infer_steps 50 \
     --sim_threshold 0.99 \
     --target_prompt "a robotic horse riding by a cowboy" \
