@@ -170,7 +170,7 @@ def iteration_wrapper(args, accelerator, subject_img_path, main_unet, reference_
         iv: 
     """
     # load all subject feature
-    subject_features  = extract_subject_features(args, subject_img_path, reference_unet, text_encoder, tokenizer, vae, noise_scheduler, None,  weight_dtype, train_transforms, text=subject_prompt, subject_denoise_timestep=args.subject_denoise_timestep, device=reference_unet.device, generator=generator)
+    subject_features  = extract_subject_features(args, subject_img_path, reference_unet, text_encoder, tokenizer, vae, noise_scheduler, None,  weight_dtype, train_transforms, text=subject_prompt, subject_denoise_timestep=args.subject_denoise_timestep, device=reference_unet.device, generator=generator, visualize_denoised=True)
 
     # reshape subject feature for CFG
     if subject_features[0].ndim == 2:
@@ -479,7 +479,7 @@ def main():
         ]
     )
 
-    with torch.autocast("cuda"):
+    with torch.autocast("cuda") and torch.no_grad():
         # I/O operations
         post_fix = ""
         if args.do_editing:

@@ -25,6 +25,7 @@ from diffusers.models.attention_processor import (
     LoRAAttnProcessor,
     LoRAAttnProcessor2_0
 )
+from diffusers.image_processor import VaeImageProcessor
 import PIL
 from diffusers import AutoencoderKL, DDPMScheduler
 import PIL
@@ -1181,7 +1182,28 @@ def resize_image_to_fit_short(image, short_size=512):
     return resized_image
 
 
-def extract_subject_features(args, image_paths, reference_unet, text_encoder, tokenizer, vae, noise_scheduler, subject_noise, weight_dtype, transforms, text="", device="cuda:0", subject_denoise_timestep = None, generator=None):
+def decode_latent(ref_sample, subject_denoise_timestep, vae, image_processor, extra_step_kwargs):
+    has_latents_mean = hasattr(vae.config, "latents_mean") and vae.config.latents_mean is not None
+    has_latents_std = hasattr(vae.config, "latents_std") and vae.config.latents_std is not None
+    
+    
+    if has_latents_mean and has_latents_std:
+            ref_sample_mean = (
+                torch.tensor(vae.config.latents_mean).view(1, 4, 1, 1).to(ref_sample.device, ref_sample.dtype)
+            )
+            ref_sample_std = (
+                torch.tensor(vae.config.latents_std).view(1, 4, 1, 1).to(ref_sample.device, ref_sample.dtype)
+            )
+            ref_sample = ref_sample * ref_sample_std / vae.config.scaling_factor + ref_sample_mean
+    else:
+            ref_sample = ref_sample / vae.config.scaling_factor
+
+    image = vae.decode(ref_sample.to(vae.dtype), return_dict=False)[0]
+    image = image_processor.postprocess(image, output_type="pil")
+    
+    return image
+
+def extract_subject_features(args, image_paths, reference_unet, text_encoder, tokenizer, vae, noise_scheduler, subject_noise, weight_dtype, transforms, text="", device="cuda:0", subject_denoise_timestep = None, generator=None, visualize_denoised=False):
 
     references = []
     # image_paths to references
@@ -1206,21 +1228,44 @@ def extract_subject_features(args, image_paths, reference_unet, text_encoder, to
     subject_denoise_timestep = subject_denoise_timestep.long()
     # prepare references from unet, convert images to latent space
 
-    comp_latents = vae.encode(references.to(weight_dtype).to(reference_unet.device)).latent_dist.sample()
-    comp_latents = comp_latents * vae.config.scaling_factor
+    comp_latents_clean = vae.encode(references.to(weight_dtype).to(reference_unet.device)).latent_dist.sample()
+    comp_latents = comp_latents_clean.clone() * vae.config.scaling_factor
     
     subject_noise = torch.randn_like(comp_latents[:1, :, :, :]) # tensor(115.0338, device='cuda:0')
 
     noisy_comp_latents = noise_scheduler.add_noise(comp_latents, subject_noise, subject_denoise_timestep) # tensor(868.9863, device='cuda:0')
     # subject_features: [Block1 features for 10 ref img, Block2, ...,Block16]
-    _, subject_features = reference_unet(noisy_comp_latents, subject_denoise_timestep, subject_encoder_hidden_states, return_dict=False, args=args)
+    ref_sample, subject_features = reference_unet(noisy_comp_latents, subject_denoise_timestep, subject_encoder_hidden_states, return_dict=False, args=args)
     subject_features = [block_feat.reshape(1, -1, block_feat.shape[-1]) if block_feat is not None else None for block_feat in subject_features] # B, sub_image_patches, dim 
     
+    if visualize_denoised:
+        vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
+        image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
+
+        # has_latents_mean = hasattr(vae.config, "latents_mean") and vae.config.latents_mean is not None
+        # has_latents_std = hasattr(vae.config, "latents_std") and vae.config.latents_std is not None
+        # if has_latents_mean and has_latents_std:
+        #     ref_sample_mean = (
+        #         torch.tensor(vae.config.latents_mean).view(1, 4, 1, 1).to(ref_sample.device, ref_sample.dtype)
+        #     )
+        #     ref_sample_std = (
+        #         torch.tensor(vae.config.latents_std).view(1, 4, 1, 1).to(ref_sample.device, ref_sample.dtype)
+        #     )
+        #     ref_sample = ref_sample * ref_sample_std / vae.config.scaling_factor + ref_sample_mean
+        # else:
+        #     ref_sample = ref_sample / vae.config.scaling_factor
+
+        # image = vae.decode(ref_sample.to(vae.dtype), return_dict=False)[0]
+        # image = image_processor.postprocess(image, output_type="pil")
+        image = decode_latent(ref_sample, vae, image_processor)
+        image_clean = decode_latent(comp_latents_clean * vae.config.scaling_factor, vae, image_processor)
+        image_noised = decode_latent(noisy_comp_latents, vae, image_processor)
+        breakpoint()
     
     return subject_features
 
 
-def extract_subject_features_sdxl(args, image_paths, reference_unet, text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, vae, noise_scheduler, subject_noise, weight_dtype, transforms, text="", device="cuda:0", subject_denoise_timestep = None, generator=None):
+def extract_subject_features_sdxl(args, image_paths, reference_unet, text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, vae, noise_scheduler, subject_noise, weight_dtype, transforms, text="", device="cuda:0", subject_denoise_timestep = None, generator=None, visualize_denoised=False):
 
     references = []
     # image_paths to references
@@ -1270,6 +1315,27 @@ def extract_subject_features_sdxl(args, image_paths, reference_unet, text_encode
     # subject_features: [Block1 features for 10 ref img, Block2, ...,Block16]
     ref_sample, subject_features = reference_unet(noisy_comp_latents, subject_denoise_timestep, subject_encoder_hidden_states, added_cond_kwargs=reference_unet_unet_added_conditions, return_dict=False, args=args)
     subject_features = [block_feat.reshape(1, -1, block_feat.shape[-1]) if block_feat is not None else None for block_feat in subject_features] # B, sub_image_patches, dim 
+    
+    if visualize_denoised:
+        vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
+        image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
+
+        has_latents_mean = hasattr(vae.config, "latents_mean") and vae.config.latents_mean is not None
+        has_latents_std = hasattr(vae.config, "latents_std") and vae.config.latents_std is not None
+        if has_latents_mean and has_latents_std:
+            ref_sample_mean = (
+                torch.tensor(vae.config.latents_mean).view(1, 4, 1, 1).to(ref_sample.device, ref_sample.dtype)
+            )
+            ref_sample_std = (
+                torch.tensor(vae.config.latents_std).view(1, 4, 1, 1).to(ref_sample.device, ref_sample.dtype)
+            )
+            ref_sample = ref_sample * ref_sample_std / vae.config.scaling_factor + ref_sample_mean
+        else:
+            ref_sample = ref_sample / vae.config.scaling_factor
+
+        image = vae.decode(ref_sample.to(vae.dtype), return_dict=False)[0]
+        image = image_processor.postprocess(image, output_type="pil")
+        breakpoint()
     
     return subject_features
 
