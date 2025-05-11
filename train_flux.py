@@ -67,7 +67,7 @@ from models.main_unet.adapter import Attention_Adapter  # my model
 from models.pipelines.pipline_sd_main import StableDiffusionPipeline_main
 from models.pipelines.pipline_sdxl_main import StableDiffusionXLPipeline_main
 
-from utils import extract_subject_features, extract_subject_features_sdxl, add_noise_to_image, calculate_dino_similarity, compute_clip_similarity, resize_image_to_fit_short, random_based_on_time, find_subsequence, prepare_mean_masks_each_word, generate_attn_masks_for_each_block, fill_bounding_rect, expand_foreground_hard, expand_foreground_soft
+from utils import extract_subject_features, extract_subject_features_sdxl, add_noise_to_image, calculate_dino_similarity, compute_clip_similarity, resize_image_to_fit_short, random_based_on_time, find_subsequence, prepare_mean_masks_each_word, generate_attn_masks_for_each_block, fill_bounding_rect, expand_foreground_hard, expand_foreground_soft, get_sigmas
 
 from accelerate.utils import DeepSpeedPlugin
 
@@ -90,22 +90,6 @@ def unwrap_model(model, accelerator):
     model = accelerator.unwrap_model(model)
     model = model._orig_mod if is_compiled_module(model) else model
     return model
-
-def get_sigmas(timesteps, n_dim=4, dtype=torch.float32):
-    sigmas = model.noise_scheduler_copy.sigmas.to(device=accelerator.device, dtype=dtype)
-    schedule_timesteps = model.noise_scheduler_copy.timesteps.to(accelerator.device).to(torch.float16)
-    schedule_timesteps = schedule_timesteps.to(torch.int)
-    timesteps = timesteps.to(accelerator.device).to(torch.float16)
-    try:
-        step_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
-    except:
-        print(schedule_timesteps, timesteps)
-        raise Exception
-            
-    sigma = sigmas[step_indices].flatten()
-    while len(sigma.shape) < n_dim:
-        sigma = sigma.unsqueeze(-1)
-    return sigma
 
 def get_trainable_params(model):
     return [param for param in model.parameters() if param.requires_grad]
@@ -935,7 +919,6 @@ def main(config_path=None, config_file=None):
             bsz = model_input.shape[0]
 
             breakpoint()
-            
             # Sample a random timestep for each image
             # for weighting schemes where we sample timesteps non-uniformly
             u = compute_density_for_timestep_sampling(weighting_scheme=None,batch_size=bsz,logit_mean=0.0,logit_std=1.0,mode_scale=1.29)

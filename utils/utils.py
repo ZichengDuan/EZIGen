@@ -13,6 +13,7 @@ import numpy as np
 from PIL import Image
 import math
 import torch
+from diffusers.training_utils import compute_density_for_timestep_sampling
 import inspect
 from diffusers.image_processor import PipelineImageInput, VaeImageProcessor
 import gc
@@ -870,6 +871,22 @@ def add_noise_to_image(noise_step, args, img: PIL.Image, vae, train_transforms, 
     
     return noisy_latents
 
+
+def get_sigmas(timesteps, noise_scheduler, n_dim=4, dtype=torch.float32, device="cuda"):
+    sigmas = noise_scheduler.sigmas.to(device=device, dtype=dtype)
+    schedule_timesteps = noise_scheduler.timesteps.to(device).to(torch.float16)
+    schedule_timesteps = schedule_timesteps.to(torch.int)
+    timesteps = timesteps.to(device).to(torch.float16)
+    try:
+        step_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
+    except:
+        print(schedule_timesteps, timesteps)
+        raise Exception
+            
+    sigma = sigmas[step_indices].flatten()
+    while len(sigma.shape) < n_dim:
+        sigma = sigma.unsqueeze(-1)
+    return sigma
 
 
 def resize_net_attn_map(net_attn_maps, target_size):
@@ -2097,40 +2114,61 @@ def get_word_mask_according_to_text_emb(query, text_emb):
 
 
 
-def extract_features(image: Image, extractor_type: str):
-    if extractor_type == "dino":
-        model_name = "facebook/dino-v2-small"
-        processor = DINOv2Processor.from_pretrained(model_name)
-        model = DINOv2Model.from_pretrained(model_name)
-    elif extractor_type == "clip":
-        model_name = "openai/clip-vit-base-patch32"
-        processor = CLIPProcessor.from_pretrained(model_name)
-        model = CLIPModel.from_pretrained(model_name)
-    else:
-        raise ValueError("extractor_type must be 'dino' or 'clip'")
-    
-    inputs = processor(images=image, return_tensors="pt")
-    outputs = model(**inputs)
 
-    if extractor_type == "dino":
-        cls_token_feature = outputs.last_hidden_state[:, 0, :]
-        patch_features = outputs.last_hidden_state[:, 1:, :]
-    elif extractor_type == "clip":
-        cls_token_feature = outputs.last_hidden_state[:, 0, :]
-        patch_features = outputs.last_hidden_state[:, 1:, :]
+def add_noise_to_image_flux(img: PIL.Image, vae, train_transforms, noise_step, noise_scheduler):
+    # encode image
+    img = train_transforms(img).unsqueeze(0).to(vae.device)
+    latent = vae.encode(img.to(vae.dtype)).latent_dist.sample()
+    # latent = latent * vae.config.scaling_factor
+
+    noise = torch.randn_like(latent, dtype=vae.dtype)
     
-    return cls_token_feature, patch_features
-    
-    
-    pass
+    # Sample a random timestep for each image
+    # for weighting schemes where we sample timesteps non-uniformly
+    u = compute_density_for_timestep_sampling(weighting_scheme=None,batch_size=1,logit_mean=0.0,logit_std=1.0,mode_scale=1.29)
+    indices = (u * noise_scheduler.config.num_train_timesteps).long()
+
+
+    # timesteps = noise_scheduler.timesteps[indices].to(device=latent.device, dtype=weight_dtype)
+    timesteps = torch.tensor([noise_step]).to(device=latent.device, dtype=vae.dtype)
+
+    # Add noise according to flow matching.
+    # zt = (1 - texp) * x + texp * z1
+    sigmas = get_sigmas(timesteps, noise_scheduler, n_dim=latent.ndim, dtype=latent.dtype, device=vae.device)
+    noisy_latent = (1.0 - sigmas) * latent + sigmas * noise
+
+    return noisy_latent
             
 if __name__ == "__main__":
-    # temp = torch.rand((320, 48, 48))
-    
-    # feat_svd(temp, top_k=5)
-    
-    image_paths = [
-        "/home/zicheng/Projects/diffusion_base/data/example_imgs/Gothic.jpg",
-        "/home/zicheng/Projects/diffusion_base/data/example_imgs/abstract.jpg"
-    ]
-    images_to_references(image_paths, max_len=10)
+    from diffusers import FlowMatchEulerDiscreteScheduler, AutoencoderKL
+    import torchvision.transforms as transforms
+
+    vae = AutoencoderKL.from_pretrained("hf_cache/black-forest-labs--FLUX.1-dev", subfolder="vae", local_files_only=True)
+
+    noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained("hf_cache/black-forest-labs--FLUX.1-dev", subfolder="scheduler", local_files_only=True)
+
+    vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
+    image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor * 2)
+
+    weight_dtype = torch.bfloat16
+    device = "cuda:0"
+    vae.to(device)
+
+    train_transforms = transforms.Compose(
+        [
+            transforms.Resize((512, 512), interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5], [0.5]),
+        ]
+    )
+
+    img = Image.open("example_images/subjects/cyber_horse.png").convert("RGB")
+
+    noise_step = 900
+    noisy_latents = add_noise_to_image_flux(img, vae, train_transforms, noise_step, noise_scheduler)
+
+    noisy_latents = (noisy_latents / vae.config.scaling_factor) + vae.config.shift_factor
+    image = vae.decode(noisy_latents, return_dict=False)[0].detach().cpu()
+
+    image = image_processor.postprocess(image, output_type="pil")[0]
+    image.save(f"outputs/test_flux_add_noise_{noise_step}.png")
