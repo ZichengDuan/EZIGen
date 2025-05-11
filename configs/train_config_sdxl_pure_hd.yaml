@@ -68,7 +68,7 @@ dataloader_num_workers: 16
 
 # validation and checkpointing
 checkpoints_total_limit: 3
-resume_from_checkpoint: latest
+resume_from_checkpoint: null
 dreambench_output_dir: null
 report_to: "tensorboard"
 tracker_project_name: "tensorboard"
@@ -128,7 +128,7 @@ snr_gamma: null
 residual_connection: true
 variant: null
 config: dummy_config.yaml # dummy placeholder for argparser
-mixed_precision: 'fp16'
+mixed_precision: 'bf16'
 
 # configs used only during inference, no need to change
 do_editing: false # this is used 

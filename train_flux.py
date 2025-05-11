@@ -502,8 +502,8 @@ def load_models_and_learnable_params(args, device, weight_dtype):
     vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant, local_files_only=True)
     
     # flux_transformer = UNet2DConditionModel_main.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, local_files_only=True, torch_dtype=weight_dtype)
-    flux_transformer = FluxTransformer2DModel.from_pretrained(args.pretrained_model_name_or_path, local_files_only=True, subfolder="transformer")
-    reference_unet = UNet2DConditionModel_ref(args=args).from_pretrained("hf_cache/stabilityai--stable-diffusion-xl-base-1.0", subfolder="unet", revision=args.revision, local_files_only=True, torch_dtype=weight_dtype)
+    flux_transformer = FluxTransformer2DModel.from_pretrained(args.pretrained_model_name_or_path, local_files_only=True, subfolder="transformer", )
+    # reference_unet = UNet2DConditionModel_ref(args=args).from_pretrained("hf_cache/stabilityai--stable-diffusion-xl-base-1.0", subfolder="unet", revision=args.revision, local_files_only=True, torch_dtype=weight_dtype)
     
     # clip_model, clip_processor = clip.load("ViT-B/32", device=device)
     clip_model, clip_processor = clip.load(args.clip_path, device=device)
@@ -516,12 +516,12 @@ def load_models_and_learnable_params(args, device, weight_dtype):
     text_encoder_one.requires_grad_(False)
     text_encoder_two.requires_grad_(False)
     flux_transformer.requires_grad_(False)
-    reference_unet.requires_grad_(False)
+    # reference_unet.requires_grad_(False)
     
     # register Adapter to flux_transformer attention blocks, and also register some configs inside UNets, also optioanlly register trainable parameters, and set those params trainable
     # num_of_adapters = register_adapter_and_configs(flux_transformer, reference_unet, args)
     num_of_adapters = 0
-    return flux_transformer, reference_unet, noise_scheduler, tokenizer_one, tokenizer_two, text_encoder_one, text_encoder_two, vae, clip_model, clip_processor, num_of_adapters
+    return flux_transformer, noise_scheduler_copy, noise_scheduler, tokenizer_one, tokenizer_two, text_encoder_one, text_encoder_two, vae, clip_model, clip_processor, num_of_adapters
 
 
 def register_adapter_and_configs(flux_transformer, reference_unet, args):
@@ -666,14 +666,15 @@ def main(config_path=None, config_file=None):
         weight_dtype = torch.bfloat16
     
     # load models, here, only flux_transformer would contains trainable parameters while reference_UNet is merely a identical copy of SD2.1-base flux_transformer used for feature extraction
-    flux_transformer, reference_unet, noise_scheduler, tokenizer_one, tokenizer_two, text_encoder_one, text_encoder_two, vae, clip_model, clip_processor, num_of_adapters = load_models_and_learnable_params(args, accelerator.device, weight_dtype)
+    flux_transformer, noise_scheduler_copy, noise_scheduler, tokenizer_one, tokenizer_two, text_encoder_one, text_encoder_two, vae, clip_model, clip_processor, num_of_adapters = load_models_and_learnable_params(args, accelerator.device, weight_dtype)
     
     # Move text_encode and vae to gpu and cast to weight_dtype
     text_encoder_one.to(accelerator.device, dtype=weight_dtype)
     text_encoder_two.to(accelerator.device, dtype=weight_dtype)
-    
+    flux_transformer.to(accelerator.device, dtype=weight_dtype)
     vae.to(accelerator.device, dtype=weight_dtype)
-    reference_unet.to(accelerator.device, dtype=weight_dtype)
+    # reference_unet.to(accelerator.device, dtype=weight_dtype)
+    
     flux_transformer.time_text_embed.timestep_embedder.linear_1.requires_grad_(True)
     
     # get trainable params for optimizer
@@ -797,7 +798,6 @@ def main(config_path=None, config_file=None):
         num_warmup_steps=num_warmup_steps_for_scheduler,
         num_training_steps=num_training_steps_for_scheduler,
     )
-    
     # Prepare everything with our `accelerator`.
     flux_transformer, optimizer, lr_scheduler, train_dataloader = accelerator.prepare(
         flux_transformer, optimizer, lr_scheduler, train_dataloader
@@ -929,18 +929,20 @@ def main(config_path=None, config_file=None):
             t_mask = target_timestep >= 1000
             target_timestep[t_mask] = torch.randint(500, 999, (t_mask.sum(),)).to(weight_dtype).to(target_timestep.device)
             
-            breakpoint()
-            
             model_input = vae.encode(target_image).latent_dist.sample()
             # Sample noise that we'll add to the latents
             noise = torch.randn_like(model_input, dtype=weight_dtype)
             bsz = model_input.shape[0]
 
+            breakpoint()
+            
             # Sample a random timestep for each image
             # for weighting schemes where we sample timesteps non-uniformly
             u = compute_density_for_timestep_sampling(weighting_scheme=None,batch_size=bsz,logit_mean=0.0,logit_std=1.0,mode_scale=1.29)
             indices = (u * noise_scheduler_copy.config.num_train_timesteps).long()
             timesteps = noise_scheduler_copy.timesteps[indices].to(device=model_input.device, dtype=weight_dtype)
+            
+            breakpoint()
             
             # Add noise according to flow matching.
             # zt = (1 - texp) * x + texp * z1
