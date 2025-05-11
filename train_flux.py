@@ -36,7 +36,7 @@ import gc
 import clip
 import transformers
 from diffusers.training_utils import compute_density_for_timestep_sampling
-from transformers import CLIPTextModel, CLIPTokenizer, CLIPProcessor, CLIPModel, AutoImageProcessor, AutoModel, AutoTokenizer, CLIPTextModelWithProjection
+from transformers import CLIPTextModel, CLIPTokenizer, CLIPProcessor, CLIPModel, AutoImageProcessor, AutoModel, AutoTokenizer, CLIPTextModelWithProjection, T5EncoderModel
 from transformers.utils import logging as transformers_logging
 from transformers.utils import ContextManagers
 from transformers.utils import logging as hf_logging
@@ -67,7 +67,7 @@ from models.main_unet.adapter import Attention_Adapter  # my model
 from models.pipelines.pipline_sd_main import StableDiffusionPipeline_main
 from models.pipelines.pipline_sdxl_main import StableDiffusionXLPipeline_main
 
-from utils import extract_subject_features, extract_subject_features_sdxl, add_noise_to_image, calculate_dino_similarity, compute_clip_similarity, resize_image_to_fit_short, random_based_on_time, find_subsequence, prepare_mean_masks_each_word, generate_attn_masks_for_each_block, fill_bounding_rect, expand_foreground_hard, expand_foreground_soft, get_sigmas
+from utils import extract_subject_features, extract_subject_features_sdxl, add_noise_to_image, calculate_dino_similarity, compute_clip_similarity, resize_image_to_fit_short, random_based_on_time, find_subsequence, prepare_mean_masks_each_word, generate_attn_masks_for_each_block, fill_bounding_rect, expand_foreground_hard, expand_foreground_soft, get_sigmas, encode_prompt, add_noise_to_image_flux
 
 from accelerate.utils import DeepSpeedPlugin
 
@@ -467,6 +467,8 @@ def init_acclerator(args):
     
     return accelerator
 
+
+
 def load_models_and_learnable_params(args, device, weight_dtype):
     # load base models
     noise_scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler", local_files_only=True)
@@ -474,20 +476,12 @@ def load_models_and_learnable_params(args, device, weight_dtype):
     # Load the tokenizers
     tokenizer_one = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path,subfolder="tokenizer",revision=args.revision,use_fast=False, local_files_only=True, torch_dtype=weight_dtype)
     tokenizer_two = AutoTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer_2", revision=args.revision, use_fast=False, local_files_only=True, torch_dtype=weight_dtype)
-    
-    text_encoder_one = CLIPTextModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant, local_files_only=True, torch_dtype=weight_dtype)
-    text_encoder_two = CLIPTextModelWithProjection.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder_2", revision=args.revision, variant=args.variant, local_files_only=True, torch_dtype=weight_dtype)
+    text_encoder_one = CLIPTextModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant, local_files_only=True, torch_dtype=weight_dtype).to(device)
+    text_encoder_two = T5EncoderModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder_2", revision=args.revision, variant=args.variant, local_files_only=True, torch_dtype=weight_dtype).to(device)
 
-    # try:
-    #     vae = AutoencoderKL.from_pretrained(args.vae_path, torch_dtype=torch.float16, local_files_only=True)
-    # except:
-    #     vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", local_files_only=True, torch_dtype=weight_dtype)
-
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant, local_files_only=True)
+    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant, local_files_only=True, torch_dtype=weight_dtype).to(device)
     
-    # flux_transformer = UNet2DConditionModel_main.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, local_files_only=True, torch_dtype=weight_dtype)
-    flux_transformer = FluxTransformer2DModel.from_pretrained(args.pretrained_model_name_or_path, local_files_only=True, subfolder="transformer", )
-    # reference_unet = UNet2DConditionModel_ref(args=args).from_pretrained("hf_cache/stabilityai--stable-diffusion-xl-base-1.0", subfolder="unet", revision=args.revision, local_files_only=True, torch_dtype=weight_dtype)
+    flux_transformer = FluxTransformer2DModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="transformer", torch_dtype=weight_dtype, local_files_only=True, ).to(device)
     
     # clip_model, clip_processor = clip.load("ViT-B/32", device=device)
     clip_model, clip_processor = clip.load(args.clip_path, device=device)
@@ -653,10 +647,10 @@ def main(config_path=None, config_file=None):
     flux_transformer, noise_scheduler_copy, noise_scheduler, tokenizer_one, tokenizer_two, text_encoder_one, text_encoder_two, vae, clip_model, clip_processor, num_of_adapters = load_models_and_learnable_params(args, accelerator.device, weight_dtype)
     
     # Move text_encode and vae to gpu and cast to weight_dtype
-    text_encoder_one.to(accelerator.device, dtype=weight_dtype)
-    text_encoder_two.to(accelerator.device, dtype=weight_dtype)
-    flux_transformer.to(accelerator.device, dtype=weight_dtype)
-    vae.to(accelerator.device, dtype=weight_dtype)
+    # text_encoder_one.to(accelerator.device, dtype=weight_dtype)
+    # text_encoder_two.to(accelerator.device, dtype=weight_dtype)
+    # flux_transformer.to(accelerator.device, dtype=weight_dtype)
+    # vae.to(accelerator.device, dtype=weight_dtype)
     # reference_unet.to(accelerator.device, dtype=weight_dtype)
     
     flux_transformer.time_text_embed.timestep_embedder.linear_1.requires_grad_(True)
@@ -904,42 +898,69 @@ def main(config_path=None, config_file=None):
     for epoch in range(first_epoch, args.num_train_epochs):
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
-            # load target related data
+            ### load target related data
             target_image = batch["target_image"].to(weight_dtype)
             target_input_ids_one = batch["input_ids_one"]
             target_input_ids_two = batch["input_ids_two"]
             target_noise = batch['target_noise'].to(weight_dtype)
             target_timestep = batch['timesteps'].to(weight_dtype)
             t_mask = target_timestep >= 1000
-            target_timestep[t_mask] = torch.randint(500, 999, (t_mask.sum(),)).to(weight_dtype).to(target_timestep.device)
-            
+            target_timestep[t_mask] = torch.randint(500, 999, (t_mask.sum(),)).to(weight_dtype).to(acclerator.device)
+
+            ### Get target text emb
+            def compute_text_embeddings(prompt, text_encoders, tokenizers):
+                with torch.no_grad():
+                    prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(text_encoders, tokenizers, prompt, 512)
+                    prompt_embeds = prompt_embeds.to(accelerator.device)
+                    pooled_prompt_embeds = pooled_prompt_embeds.to(accelerator.device)
+                    text_ids = text_ids.to(accelerator.device)
+                return prompt_embeds, pooled_prompt_embeds, text_ids
+            prompt_embeds, pooled_prompt_embeds, text_ids = compute_text_embeddings(batch["target_prompt"], [text_encoder_one, text_encoder_two], [tokenizer_one, tokenizer_two])
+
+            ### Get target noisy latent input
             model_input = vae.encode(target_image).latent_dist.sample()
             # Sample noise that we'll add to the latents
             noise = torch.randn_like(model_input, dtype=weight_dtype)
             bsz = model_input.shape[0]
-
-            breakpoint()
-            # Sample a random timestep for each image
-            # for weighting schemes where we sample timesteps non-uniformly
+            # Sample a random timestep for each image, for weighting schemes where we sample timesteps non-uniformly
             u = compute_density_for_timestep_sampling(weighting_scheme=None,batch_size=bsz,logit_mean=0.0,logit_std=1.0,mode_scale=1.29)
             indices = (u * noise_scheduler_copy.config.num_train_timesteps).long()
-            timesteps = noise_scheduler_copy.timesteps[indices].to(device=model_input.device, dtype=weight_dtype)
-            
-            breakpoint()
-            
-            # Add noise according to flow matching.
-            # zt = (1 - texp) * x + texp * z1
-            sigmas = get_sigmas(timesteps, n_dim=model_input.ndim, dtype=model_input.dtype)
+            timesteps = noise_scheduler_copy.timesteps[indices].to(device=acclerator.device, dtype=weight_dtype)
+            # Add noise according to flow matching. zt = (1 - texp) * x + texp * z1
+            sigmas = get_sigmas(timesteps, noise_scheduler_copy, n_dim=model_input.ndim, dtype=weight_dtype)
             noisy_model_input = (1.0 - sigmas) * model_input + sigmas * noise
-
-            # handle guidance
-            # guidance = torch.tensor([args.guidance_scale], device=accelerator.device)
-            guidance = torch.full([1], args.guidance_scale, device=accelerator.device, dtype=weight_dtype)
+            # handle guidance, guidance = torch.tensor([args.guidance_scale], device=accelerator.device)
+            guidance = torch.full([1], 3.5, device=accelerator.device, dtype=weight_dtype)
             guidance = guidance.expand(model_input.shape[0])
             
+            ### Get subject feature
+            subject_images = batch["subject_images"].to(weight_dtype)
+            # add noise to subject image latent
+            noisy_subject_latents = add_noise_to_image_flux(subject_images, vae, noise_step, noise_scheduler)
+
+            breakpoint()
+            # extract subject image features from flux
             
+
+
+            # get subject text emb
+            subject_prompt_embeds, subject_pooled_prompt_embeds, subject_text_ids = compute_text_embeddings(batch["subject_prompt"], [text_encoder_one, text_encoder_two], [tokenizer_one, tokenizer_two])
             
-            
+
+            ### 
+
+            model_pred = transformer(
+                hidden_states=noisy_model_input,
+                # YiYi notes: divide it by 1000 for now because we scale it by 1000 in the transforme rmodel (we should not keep it but I want to keep the inputs same for the model for testing)
+                timestep=timesteps / 1000,
+                guidance=guidance,
+                pooled_projections=pooled_prompt_embeds,
+                encoder_hidden_states=prompt_embeds,
+                txt_ids=torch.zeros(prompt_embeds.shape[1], 3).to(device=accelerator.device, dtype=weight_dtype),
+                img_ids=latent_image_ids,
+                return_dict=False,
+            )[0]
+                
             
             
             
