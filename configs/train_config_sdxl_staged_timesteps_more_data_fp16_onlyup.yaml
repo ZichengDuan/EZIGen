@@ -30,7 +30,6 @@ with_subject200k: false
 with_subject200k_jigsaw: false
 
 # text related settings
-drop_text_ratio: 0.3
 remove_add_text_emb: false
 
 

@@ -44,3 +44,5 @@ diffusers/
 misc/
 models/inversion_models/image_edit_sdxl/
 models/inversion_models/sdxl_inversions/
+hf_cache/
+hf_cache

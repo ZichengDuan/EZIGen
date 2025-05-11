@@ -1,7 +1,7 @@
 # checkpoint name
 pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
 checkpoint_path: experiments/ezigen_opensource/best_2/checkpoint-200000 # e.g. checkpoint-200000
-clip_path: /home/a1901664/.cache/clip//ViT-B-32.pt # or simply "ViT-B/32" and let transformers module do its job
+clip_path: /home/a1901664/.cache/clip/ViT-B-32.pt # or simply "ViT-B/32" and let transformers module do its job
 
 # system defaults, !no need to change anything here!
 local_rank: 0 # we only do inference on a single GPU
@@ -34,4 +34,4 @@ variant: null
 residual_connection: true
 
 # no need to change
-infer_mode: true # we are now infer mode
+# infer_mode: true # we are now infer mode

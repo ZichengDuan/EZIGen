@@ -1,6 +1,6 @@
 # I/O
-pretrained_model_name_or_path: hf_models/stabilityai--stable-diffusion-xl-base-1.0
-clip_path: hf_models/ViT-B-32.pt # or simply "ViT-B/32" and let transformers module do its job
+pretrained_model_name_or_path: hf_cache/stabilityai--stable-diffusion-xl-base-1.0
+clip_path: ViT-B/32 # or simply "ViT-B/32" and let transformers module do its job
 output_dir: experiments/train/train_sdxl_no_jigsaw_n_ref_1
 
 # UNet configs
