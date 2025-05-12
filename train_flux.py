@@ -1,4 +1,6 @@
 import sys
+sys.path.append("..")
+sys.path.append(".")
 import os
 import time
 import math
@@ -35,7 +37,7 @@ from PIL import Image
 import gc
 import clip
 import transformers
-from diffusers.training_utils import compute_density_for_timestep_sampling
+from diffusers.training_utils import compute_density_for_timestep_sampling, compute_loss_weighting_for_sd3
 from transformers import CLIPTextModel, CLIPTokenizer, CLIPProcessor, CLIPModel, AutoImageProcessor, AutoModel, AutoTokenizer, CLIPTextModelWithProjection, T5EncoderModel
 from transformers.utils import logging as transformers_logging
 from transformers.utils import ContextManagers
@@ -44,8 +46,10 @@ import wandb
 import diffusers
 from diffusers import (
     AutoencoderKL, DDPMScheduler, DDIMScheduler, StableDiffusionPipeline, UNet2DConditionModel, 
-    DPMSolverSDEScheduler, DPMSolverMultistepInverseScheduler, FluxTransformer2DModel, FlowMatchEulerDiscreteScheduler
+    DPMSolverSDEScheduler, DPMSolverMultistepInverseScheduler, FlowMatchEulerDiscreteScheduler
 )
+from models import FluxTransformer2DModel
+
 from diffusers.utils import is_xformers_available, check_min_version, deprecate, is_wandb_available, make_image_grid, convert_state_dict_to_diffusers, check_min_version
 from diffusers.training_utils import EMAModel, compute_snr, cast_training_params
 from diffusers.optimization import get_scheduler
@@ -67,7 +71,7 @@ from models.main_unet.adapter import Attention_Adapter  # my model
 from models.pipelines.pipline_sd_main import StableDiffusionPipeline_main
 from models.pipelines.pipline_sdxl_main import StableDiffusionXLPipeline_main
 
-from utils import extract_subject_features, extract_subject_features_sdxl, add_noise_to_image, calculate_dino_similarity, compute_clip_similarity, resize_image_to_fit_short, random_based_on_time, find_subsequence, prepare_mean_masks_each_word, generate_attn_masks_for_each_block, fill_bounding_rect, expand_foreground_hard, expand_foreground_soft, get_sigmas, encode_prompt, add_noise_to_image_flux
+from utils import extract_subject_features, extract_subject_features_sdxl, add_noise_to_image, calculate_dino_similarity, compute_clip_similarity, resize_image_to_fit_short, random_based_on_time, find_subsequence, prepare_mean_masks_each_word, generate_attn_masks_for_each_block, fill_bounding_rect, expand_foreground_hard, expand_foreground_soft, get_sigmas, encode_prompt, add_noise_to_image_flux, prepare_latents, pack_latents, unpack_latents
 
 from accelerate.utils import DeepSpeedPlugin
 
@@ -440,7 +444,7 @@ def parse_args_from_yaml(config_path=None, config_file=None):
     return args
 
 
-def init_acclerator(args):
+def init_accelerator(args):
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
     accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=logging_dir)
 
@@ -494,7 +498,6 @@ def load_models_and_learnable_params(args, device, weight_dtype):
     text_encoder_one.requires_grad_(False)
     text_encoder_two.requires_grad_(False)
     flux_transformer.requires_grad_(False)
-    # reference_unet.requires_grad_(False)
     
     # register Adapter to flux_transformer attention blocks, and also register some configs inside UNets, also optioanlly register trainable parameters, and set those params trainable
     # num_of_adapters = register_adapter_and_configs(flux_transformer, reference_unet, args)
@@ -631,7 +634,7 @@ def main(config_path=None, config_file=None):
     )
     
     # load accelerator
-    accelerator = init_acclerator(args)
+    accelerator = init_accelerator(args)
     
     # Handle the repository creation
     if accelerator.is_main_process:
@@ -646,18 +649,35 @@ def main(config_path=None, config_file=None):
     # load models, here, only flux_transformer would contains trainable parameters while reference_UNet is merely a identical copy of SD2.1-base flux_transformer used for feature extraction
     flux_transformer, noise_scheduler_copy, noise_scheduler, tokenizer_one, tokenizer_two, text_encoder_one, text_encoder_two, vae, clip_model, clip_processor, num_of_adapters = load_models_and_learnable_params(args, accelerator.device, weight_dtype)
     
-    # Move text_encode and vae to gpu and cast to weight_dtype
-    # text_encoder_one.to(accelerator.device, dtype=weight_dtype)
-    # text_encoder_two.to(accelerator.device, dtype=weight_dtype)
-    # flux_transformer.to(accelerator.device, dtype=weight_dtype)
-    # vae.to(accelerator.device, dtype=weight_dtype)
-    # reference_unet.to(accelerator.device, dtype=weight_dtype)
-    
-    flux_transformer.time_text_embed.timestep_embedder.linear_1.requires_grad_(True)
-    
+    # set which parameter is trainable, the addtional qkv
+    # flux_transformer.time_text_embed.timestep_embedder.linear_1.requires_grad_(True)
+    for i, block in enumerate(flux_transformer.transformer_blocks):
+        attn = block.attn
+        # 克隆并注册额外的 q/k/v
+        attn.add_sub_to_q = copy.deepcopy(attn.to_q)
+        attn.add_sub_to_k = copy.deepcopy(attn.to_k)
+        attn.add_sub_to_v = copy.deepcopy(attn.to_v)
+
+        attn.norm_added_sub_q = copy.deepcopy(attn.norm_q)
+        attn.norm_added_sub_k = copy.deepcopy(attn.norm_k)
+
+        attn.add_module("add_sub_to_q", attn.add_sub_to_q)
+        attn.add_module("add_sub_to_k", attn.add_sub_to_k)
+        attn.add_module("add_sub_to_v", attn.add_sub_to_v)
+
+        attn.add_module("norm_added_sub_q", attn.norm_added_sub_q)
+        attn.add_module("norm_added_sub_k", attn.norm_added_sub_k)
+
+        attn.add_sub_to_q.requires_grad_()
+        attn.add_sub_to_k.requires_grad_()
+        attn.add_sub_to_v.requires_grad_()
+        attn.norm_added_sub_q.requires_grad_()
+        attn.norm_added_sub_k.requires_grad_()
+
     # get trainable params for optimizer
     trainable_params = get_trainable_params(flux_transformer)
     trainable_params_name = get_trainable_params_name(flux_transformer)
+
 
     if args.scale_lr:
         args.learning_rate = (args.learning_rate * args.gradient_accumulation_steps * args.train_batch_size * accelerator.num_processes)
@@ -905,7 +925,9 @@ def main(config_path=None, config_file=None):
             target_noise = batch['target_noise'].to(weight_dtype)
             target_timestep = batch['timesteps'].to(weight_dtype)
             t_mask = target_timestep >= 1000
-            target_timestep[t_mask] = torch.randint(500, 999, (t_mask.sum(),)).to(weight_dtype).to(acclerator.device)
+            target_timestep[t_mask] = torch.randint(500, 999, (t_mask.sum(),)).to(weight_dtype).to(accelerator.device)
+
+            vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1) if vae is not None else 8
 
             ### Get target text emb
             def compute_text_embeddings(prompt, text_encoders, tokenizers):
@@ -925,7 +947,7 @@ def main(config_path=None, config_file=None):
             # Sample a random timestep for each image, for weighting schemes where we sample timesteps non-uniformly
             u = compute_density_for_timestep_sampling(weighting_scheme=None,batch_size=bsz,logit_mean=0.0,logit_std=1.0,mode_scale=1.29)
             indices = (u * noise_scheduler_copy.config.num_train_timesteps).long()
-            timesteps = noise_scheduler_copy.timesteps[indices].to(device=acclerator.device, dtype=weight_dtype)
+            timesteps = noise_scheduler_copy.timesteps[indices].to(device=accelerator.device, dtype=weight_dtype)
             # Add noise according to flow matching. zt = (1 - texp) * x + texp * z1
             sigmas = get_sigmas(timesteps, noise_scheduler_copy, n_dim=model_input.ndim, dtype=weight_dtype)
             noisy_model_input = (1.0 - sigmas) * model_input + sigmas * noise
@@ -933,23 +955,44 @@ def main(config_path=None, config_file=None):
             guidance = torch.full([1], 3.5, device=accelerator.device, dtype=weight_dtype)
             guidance = guidance.expand(model_input.shape[0])
             
+            noisy_model_input = pack_latents(noisy_model_input, bsz, 16, int(512/vae_scale_factor), int(512/vae_scale_factor))
+
             ### Get subject feature
             subject_images = batch["subject_images"].to(weight_dtype)
             # add noise to subject image latent
+            noise_step = 1
             noisy_subject_latents = add_noise_to_image_flux(subject_images, vae, noise_step, noise_scheduler)
-
-            breakpoint()
-            # extract subject image features from flux
-            
-
 
             # get subject text emb
             subject_prompt_embeds, subject_pooled_prompt_embeds, subject_text_ids = compute_text_embeddings(batch["subject_prompt"], [text_encoder_one, text_encoder_two], [tokenizer_one, tokenizer_two])
             
+            latent_image_ids = prepare_latents(
+                vae_scale_factor,
+                bsz,
+                512,
+                512,
+                weight_dtype,
+                accelerator.device,
+            )
 
-            ### 
+            noisy_subject_latents = pack_latents(noisy_subject_latents, bsz, 16, int(512/vae_scale_factor), int(512/vae_scale_factor))
 
-            model_pred = transformer(
+            with torch.no_grad()
+                # extract subject image features from flux
+                _, subject_features = flux_transformer(
+                    hidden_states=noisy_subject_latents,
+                    # YiYi notes: divide it by 1000 for now because we scale it by 1000 in the transforme rmodel (we should not keep it but I want to keep the inputs same for the model for testing)
+                    timestep=torch.tensor([noise_step]).to(device=accelerator.device, dtype=weight_dtype) / 1000,
+                    guidance=guidance,
+                    pooled_projections=subject_pooled_prompt_embeds,
+                    encoder_hidden_states=subject_prompt_embeds,
+                    txt_ids=torch.zeros(subject_prompt_embeds.shape[1], 3).to(device=accelerator.device, dtype=weight_dtype),
+                    img_ids=latent_image_ids,
+                    return_dict=False,
+                    subject_features=[],
+                    retrieve_subject_features=True
+                )
+            model_pred, _ = flux_transformer(
                 hidden_states=noisy_model_input,
                 # YiYi notes: divide it by 1000 for now because we scale it by 1000 in the transforme rmodel (we should not keep it but I want to keep the inputs same for the model for testing)
                 timestep=timesteps / 1000,
@@ -959,153 +1002,27 @@ def main(config_path=None, config_file=None):
                 txt_ids=torch.zeros(prompt_embeds.shape[1], 3).to(device=accelerator.device, dtype=weight_dtype),
                 img_ids=latent_image_ids,
                 return_dict=False,
-            )[0]
-                
+                subject_features=subject_features
+            )
             
+            model_pred = unpack_latents(model_pred,height=512,width=512,vae_scale_factor=vae_scale_factor,)
             
-            
+            weighting = compute_loss_weighting_for_sd3(weighting_scheme=None, sigmas=sigmas)
 
-            padding_nums = batch['padding_num']
-            target_timestep = target_timestep.long()
-            
-            # load subject related data
-            subject_images = batch["subject_images"].to(weight_dtype)
-            subject_input_ids_one = batch["subject_input_ids_one"]
-            subject_input_ids_two = batch["subject_input_ids_two"]
-            subject_noise = batch['subject_noise'].to(weight_dtype)
-            subject_timestep = torch.tensor(args.subject_timestep, device=subject_images.device).repeat(subject_images.shape[0]).to(weight_dtype)
-            subject_timestep = subject_timestep.long()
-            if subject_noise.shape[0] != subject_images.shape[0]:
-                subject_noise = subject_noise.repeat(subject_images.shape[0], 1, 1, 1)
-            
-            # preprocess subject related features
-            subject_latents = vae.encode(subject_images.to(weight_dtype)).latent_dist.sample()
-            subject_latents = subject_latents * vae.config.scaling_factor
-            
-            noisy_subject_latents = noise_scheduler.add_noise(subject_latents, subject_noise, subject_timestep) # add [t=1]s to the latent
-            subject_encoder_hidden_states = text_encoder_one(subject_input_ids_one, return_dict=False)[0]
-            subject_pooled_prompt_embeds, subject_encoder_hidden_states_two = text_encoder_two(subject_input_ids_two, return_dict=False)
-            subject_encoder_hidden_states = torch.cat((subject_encoder_hidden_states, subject_encoder_hidden_states_two), dim=-1)
-            
-            def compute_time_ids(original_size, crops_coords_top_left):
-                # Adapted from pipeline.StableDiffusionXLPipeline._get_add_time_ids
-                target_size = (args.resolution, args.resolution)
-                add_time_ids = list(original_size + crops_coords_top_left + target_size)
-                add_time_ids = torch.tensor([add_time_ids], device=accelerator.device, dtype=weight_dtype)
-                return add_time_ids
-            
-            subject_pooled_prompt_embeds = subject_pooled_prompt_embeds.view(subject_latents.shape[0], -1)
-            subject_add_time_ids = torch.cat([compute_time_ids(s, c) for s, c in zip([(args.resolution, args.resolution) for i in range(subject_latents.shape[0])], [(0, 0) for i in range(subject_latents.shape[0])])])
-            
-            # obtain subject features from reference UNet for later usage
-            reference_unet_unet_added_conditions = {"time_ids": subject_add_time_ids}
-            reference_unet_unet_added_conditions.update({"text_embeds": subject_pooled_prompt_embeds})
-            # breakpoint()
-            _, subject_features = reference_unet(noisy_subject_latents, subject_timestep, subject_encoder_hidden_states, added_cond_kwargs=reference_unet_unet_added_conditions, return_dict=False, args=args) 
-            # breakpoint()
-            
-            subject_features = [block_feat.reshape(args.train_batch_size,-1,block_feat.shape[-1]) for block_feat in subject_features] # bsz ,sub_image_patches (later concat to k and v), dim 
-            
-            # random drop all reference, including text, this is for CFG
-            if random.randint(1,10) / 10 < args.drop_reference_ratio:
-                # turn to dummy inputs, and make sure to pad
-                subject_features = [torch.zeros_like(subject_features[i]).to(weight_dtype) for i in range(num_of_adapters)]
-                padding_nums = torch.tensor([args.num_sub_img] * args.train_batch_size)
+            # flow matching loss
+            target = noise - model_input
 
-            # preprocess target related features
-            target_latents = vae.encode(target_image).latent_dist.sample() # [bsz, 4, args.resolution // 8, args.resolution // 8]
-            target_latents = target_latents * vae.config.scaling_factor
+            # Compute regular loss.
+            flux_loss = torch.mean((weighting.float() * (model_pred.float() - target.float()) ** 2).reshape(target.shape[0], -1),1)
+            flux_loss = flux_loss.mean()
 
-            noisy_target_latents = noise_scheduler.add_noise(target_latents, target_noise, target_timestep)
-            target_encoder_hidden_states = text_encoder_one(target_input_ids_one, return_dict=False)[0]
-            target_pooled_prompt_embeds, target_encoder_hidden_states_two = text_encoder_two(target_input_ids_two, return_dict=False)
-            
-            #### Text one
-            target_encoder_hidden_states = torch.cat((target_encoder_hidden_states, target_encoder_hidden_states_two), dim=-1)
-            
-            #### Text two
-            target_pooled_prompt_embeds = target_pooled_prompt_embeds.view(args.train_batch_size, -1)
-            
-            ########## Drop Text Start ##########
-            # random drop all text prompts, purely rely on subject
-            if random.randint(1,1000) / 1000 < args.drop_text_ratio:
-                target_encoder_hidden_states = torch.zeros_like(target_encoder_hidden_states)
-
-            # always set text emb to zero, reduce the effect of text
-            if args.remove_add_text_emb:
-                target_pooled_prompt_embeds = torch.zeros_like(target_pooled_prompt_embeds).to(weight_dtype)
-            ########## Drop Text End ##########
-
-            target_add_time_ids = torch.cat([compute_time_ids(s, c) for s, c in zip([(1024, 1024) for i in range(args.train_batch_size)], [(0, 0) for i in range(args.train_batch_size)])])
-
-            # obtain subject features from reference UNet for later usage
-            flux_transformer_unet_added_conditions = {"time_ids": target_add_time_ids}
-            flux_transformer_unet_added_conditions.update({"text_embeds": target_pooled_prompt_embeds})
-            
-            # Get the target for loss depending on the prediction type
-            if args.prediction_type is not None:
-                # set prediction_type of scheduler if defined
-                noise_scheduler.register_to_config(prediction_type=args.prediction_type)
-            if noise_scheduler.config.prediction_type == "epsilon":
-                target = target_noise
-            elif noise_scheduler.config.prediction_type == "v_prediction":
-                target = noise_scheduler.get_velocity(target_latents, target_noise, target_timestep)
-            else:
-                raise ValueError(f"Unknown prediction type {noise_scheduler.configprediction_type}")
-                
-            # construct attention mask for training
-            training_attn_mask = None
-            if padding_nums is not None:
-                training_attn_mask = torch.zeros(args.train_batch_size, 2, 2 * (args.num_sub_img + 1)).to(noisy_target_latents.device)
-                for i in range(args.train_batch_size):
-                    training_attn_mask[i, :, - padding_nums[i] * 2:] = -50000.0
-                training_attn_mask = training_attn_mask.to(weight_dtype)
-            # breakpoint()
-            # obtain predicted noise
-            model_pred = flux_transformer(noisy_target_latents, target_timestep, target_encoder_hidden_states, added_cond_kwargs=flux_transformer_unet_added_conditions, return_dict=False, subject_feats=subject_features, training_attn_mask=training_attn_mask, args=args)[0]
-            
-            if args.snr_gamma is None:
-                loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-            else:
-                # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
-                # Since we predict the target_noise instead of x_0, the original formulation isslightly changed.
-                # This is discussed in Section 4.2 of the same paper.
-                snr = compute_snr(noise_scheduler, target_timestep)
-                mse_loss_weights = torch.stack([snr, args.snr_gamma * torch.ones_like(target_timestep)], dim=1).min(dim=1)[0]
-                if noise_scheduler.config.prediction_type == "epsilon":
-                        mse_loss_weights = mse_loss_weights / snr
-                elif noise_scheduler.config.prediction_type == "v_prediction":
-                        mse_loss_weights = mse_loss_weights / (snr + 1)
-                    
-                loss = F.mse_loss(model_pred.float(), target.float(), reduction="none")
-                loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
-                loss = loss.mean()
-                
-                # Gather the losses across all processes for logging (if we use distributedtraining).
-            avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
-            train_loss += avg_loss.item() / args.gradient_accumulation_steps
-                
-            accelerator.backward(loss)
+            breakpoint()
+            accelerator.backward(flux_loss)
             if accelerator.sync_gradients:
                 accelerator.clip_grad_norm_(trainable_params, args.max_grad_norm)
             optimizer.step()
             lr_scheduler.step()
             optimizer.zero_grad()
-                
-            if global_step % args.validation_steps == 0:
-                # display the
-                for tracker in accelerator.trackers:
-                    if tracker.name == "tensorboard":
-                        unwrapped_flux_transformer = unwrap_model(flux_transformer, accelerator)
-                        values = unwrapped_flux_transformer.learnable_weights.data.detach().cpu()
-                        plt.figure(figsize=(10, 5))
-                        plt.bar(range(1, num_of_adapters + 1), values.to(torch.float32).numpy())  # 创建柱状图
-                        plt.title('learnable_weights')
-                        if tracker.name == "tensorboard":
-                            tracker.writer.add_figure('learnable_weights', plt.gcf(), step)
-                        else:
-                            wandb.log({'learnable_weights': wandb.Image(plt.gcf())})
-                        plt.close()
                 
             # Checks if the accelerator has performed an optimization step behind the scenesw
             if accelerator.sync_gradients:
@@ -1114,8 +1031,6 @@ def main(config_path=None, config_file=None):
                 accelerator.log({"train_loss": train_loss}, step=global_step)
                 train_loss = 0.0
                 if global_step % args.checkpointing_steps == 0:
-                    # if accelerator.is_main_process:
-                        # _before_ saving state, check if this save would set us overthe`checkpoints_total_limit`
                     if args.checkpoints_total_limit is not None:
                         checkpoints = os.listdir(args.output_dir)
                         checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
@@ -1124,9 +1039,7 @@ def main(config_path=None, config_file=None):
                         if len(checkpoints) >= args.checkpoints_total_limit:
                             num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
                             removing_checkpoints = checkpoints[0:num_to_remove]
-                            logger.info(
-                                        f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
-                                )
+                            logger.info(f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints")
                             logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
                             try:
                                 for removing_checkpoint in removing_checkpoints:
@@ -1151,8 +1064,7 @@ def main(config_path=None, config_file=None):
                 progress_bar.set_postfix(**logs)
                 if global_step >= args.max_train_steps:
                     break
-
-
+            
             if (resumed==True or (args.target_prompt_1 is not None and global_step % args.validation_steps == 0)) and accelerator.is_main_process:
                 vis_images = log_validation_batch(vae, text_encoder_one, text_encoder_two, tokenizer_one, tokenizer_two, accelerator.unwrap_model(flux_transformer), reference_unet, noise_scheduler, subject_noise, train_transforms, args, accelerator, weight_dtype, epoch, batch_text_prompts, batch_origin_text_prompts, batch_subject_prompts, batch_img_paths, batch_variation_num, clip_model, clip_processor)
                 args.validation_steps = 2000

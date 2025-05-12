@@ -2292,9 +2292,12 @@ class FluxAttnProcessor2_0:
         **extra_kwargs
     ) -> torch.FloatTensor:
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
-        dzc = extra_kwargs.get("dzc")
-        if dzc is not None:
-            breakpoint()
+        subject_feature = extra_kwargs.get("subject_feature")
+        # if subject_feature is not None:
+        #     breakpoint()
+        #     # subject_feature.shape: torch.Size([1, 1024, 3072]),m same as hidden_states
+        #     pass
+        
         # `sample` projections.
         query = attn.to_q(hidden_states)
         key = attn.to_k(hidden_states)
@@ -2311,7 +2314,22 @@ class FluxAttnProcessor2_0:
             query = attn.norm_q(query)
         if attn.norm_k is not None:
             key = attn.norm_k(key)
+        
+        if subject_feature is not None:
+            # do additional attention for reference feature
+            sub_query = attn.add_sub_to_q(subject_feature)
+            sub_key = attn.add_sub_to_k(subject_feature)
+            sub_value = attn.add_sub_to_v(subject_feature)
 
+            sub_query = sub_query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+            sub_key = sub_key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+            sub_value = sub_value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+
+            if attn.add_sub_to_q is not None:
+                sub_query = attn.norm_added_sub_q(sub_query)
+            if attn.norm_k is not None:
+                sub_key = attn.norm_added_sub_k(sub_key)
+            
         # the attention in FluxSingleTransformerBlock does not use `encoder_hidden_states`
         if encoder_hidden_states is not None:
             # `context` projections.
@@ -2319,15 +2337,9 @@ class FluxAttnProcessor2_0:
             encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
             encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states)
 
-            encoder_hidden_states_query_proj = encoder_hidden_states_query_proj.view(
-                batch_size, -1, attn.heads, head_dim
-            ).transpose(1, 2)
-            encoder_hidden_states_key_proj = encoder_hidden_states_key_proj.view(
-                batch_size, -1, attn.heads, head_dim
-            ).transpose(1, 2)
-            encoder_hidden_states_value_proj = encoder_hidden_states_value_proj.view(
-                batch_size, -1, attn.heads, head_dim
-            ).transpose(1, 2)
+            encoder_hidden_states_query_proj = encoder_hidden_states_query_proj.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+            encoder_hidden_states_key_proj = encoder_hidden_states_key_proj.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+            encoder_hidden_states_value_proj = encoder_hidden_states_value_proj.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
             if attn.norm_added_q is not None:
                 encoder_hidden_states_query_proj = attn.norm_added_q(encoder_hidden_states_query_proj)
@@ -2339,11 +2351,19 @@ class FluxAttnProcessor2_0:
             key = torch.cat([encoder_hidden_states_key_proj, key], dim=2)
             value = torch.cat([encoder_hidden_states_value_proj, value], dim=2)
 
+        if subject_feature is not None:
+            query = torch.cat([query, sub_query], dim=2)
+            key = torch.cat([key, sub_key], dim=2)
+            value = torch.cat([value, sub_value], dim=2)
+
         if image_rotary_emb is not None:
             from diffusers.models.embeddings import apply_rotary_emb
+            try:
+                query = apply_rotary_emb(query, image_rotary_emb)
+                key = apply_rotary_emb(key, image_rotary_emb)
+            except:
+                breakpoint()
 
-            query = apply_rotary_emb(query, image_rotary_emb)
-            key = apply_rotary_emb(key, image_rotary_emb)
 
         hidden_states = F.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False

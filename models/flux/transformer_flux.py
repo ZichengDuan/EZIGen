@@ -160,7 +160,6 @@ class FluxTransformerBlock(nn.Module):
             **joint_attention_kwargs,
             **extra_kwargs
         )
-
         if len(attention_outputs) == 2:
             attn_output, context_attn_output = attention_outputs
         elif len(attention_outputs) == 3:
@@ -168,7 +167,11 @@ class FluxTransformerBlock(nn.Module):
 
         # Process attention outputs for the `hidden_states`.
         attn_output = gate_msa.unsqueeze(1) * attn_output
-        hidden_states = hidden_states + attn_output
+        try:
+            hidden_states = hidden_states + attn_output # [1, 16, 64, 3072], [1, 1024, 3072]
+        except:
+            # dzc: only preserve the latent part
+            hidden_states = hidden_states + attn_output[:, hidden_states.shape[1]:, :]
 
         norm_hidden_states = self.norm2(hidden_states)
         norm_hidden_states = norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
@@ -448,8 +451,7 @@ class FluxTransformer2DModel(
                 logger.warning(
                     "Passing `scale` via `joint_attention_kwargs` when not using the PEFT backend is ineffective."
                 )
-
-        hidden_states = self.x_embedder(hidden_states)
+        hidden_states = self.x_embedder(hidden_states)# [1, 1024, 64]
 
         timestep = timestep.to(hidden_states.dtype) * 1000
         if guidance is not None:
@@ -477,14 +479,29 @@ class FluxTransformer2DModel(
             )
             img_ids = img_ids[0]
 
-        ids = torch.cat((txt_ids, img_ids), dim=0)
+        if extra_kwargs.get("subject_features") is not None and len(extra_kwargs.get("subject_features")) > 0:
+            ids = torch.cat((txt_ids, img_ids, img_ids), dim=0) # dzc: for subject feature
+        else:
+            ids = torch.cat((txt_ids, img_ids), dim=0)
+
         image_rotary_emb = self.pos_embed(ids)
+        image_rotary_emb_origin = self.pos_embed(torch.cat((txt_ids, img_ids), dim=0))
 
         if joint_attention_kwargs is not None and "ip_adapter_image_embeds" in joint_attention_kwargs:
             ip_adapter_image_embeds = joint_attention_kwargs.pop("ip_adapter_image_embeds")
             ip_hidden_states = self.encoder_hid_proj(ip_adapter_image_embeds)
             joint_attention_kwargs.update({"ip_hidden_states": ip_hidden_states})
 
+        if extra_kwargs.get("retrieve_subject_features") == True:
+            subject_features = []
+            retrieve_model = True
+        else:
+            subject_features = None
+            retrieve_model = False
+
+        if extra_kwargs.get("subject_features") is not None and len(extra_kwargs.get("subject_features")) > 0:
+            subject_features = extra_kwargs.get("subject_features")
+            retrieve_model = False
         for index_block, block in enumerate(self.transformer_blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 encoder_hidden_states, hidden_states = self._gradient_checkpointing_func(
@@ -496,26 +513,32 @@ class FluxTransformer2DModel(
                 )
 
             else:
+                # before each multi-model block
+                if subject_features is not None and retrieve_model:
+                    subject_features.append(hidden_states)
                 encoder_hidden_states, hidden_states = block(
                     hidden_states=hidden_states, # [1, n_tokens, dim(3072)]
                     encoder_hidden_states=encoder_hidden_states, # [1, 512, 3072]
                     temb=temb, # 
                     image_rotary_emb=image_rotary_emb,
                     joint_attention_kwargs=joint_attention_kwargs,
+                    subject_feature = subject_features[index_block] if (not retrieve_model and subject_features) else None,
                     **extra_kwargs
                 )
-
-            # controlnet residual
-            if controlnet_block_samples is not None:
-                interval_control = len(self.transformer_blocks) / len(controlnet_block_samples)
-                interval_control = int(np.ceil(interval_control))
-                # For Xlabs ControlNet.
-                if controlnet_blocks_repeat:
-                    hidden_states = (
-                        hidden_states + controlnet_block_samples[index_block % len(controlnet_block_samples)]
-                    )
-                else:
-                    hidden_states = hidden_states + controlnet_block_samples[index_block // interval_control]
+                if extra_kwargs.get("retrieve_subject_features") == False:
+                    breakpoint()
+            # # controlnet residual
+            # if controlnet_block_samples is not None:
+            #     interval_control = len(self.transformer_blocks) / len(controlnet_block_samples)
+            #     interval_control = int(np.ceil(interval_control))
+            #     # For Xlabs ControlNet.
+            #     if controlnet_blocks_repeat:
+            #         hidden_states = (
+            #             hidden_states + controlnet_block_samples[index_block % len(controlnet_block_samples)]
+            #         )
+            #     else:
+            #         hidden_states = hidden_states + controlnet_block_samples[index_block // interval_control]
+        
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
         for index_block, block in enumerate(self.single_transformer_blocks):
@@ -524,14 +547,14 @@ class FluxTransformer2DModel(
                     block,
                     hidden_states,
                     temb,
-                    image_rotary_emb,
+                    image_rotary_emb_origin,
                 )
 
             else:
                 hidden_states = block(
                     hidden_states=hidden_states,
                     temb=temb,
-                    image_rotary_emb=image_rotary_emb,
+                    image_rotary_emb=image_rotary_emb_origin,
                     joint_attention_kwargs=joint_attention_kwargs,
                     **extra_kwargs
                 )
@@ -555,6 +578,6 @@ class FluxTransformer2DModel(
             unscale_lora_layers(self, lora_scale)
 
         if not return_dict:
-            return (output,)
+            return (output, subject_features)
 
         return Transformer2DModelOutput(sample=output)
