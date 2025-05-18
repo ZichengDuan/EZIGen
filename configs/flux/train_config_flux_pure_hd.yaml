@@ -1,7 +1,7 @@
 # I/O
 pretrained_model_name_or_path: hf_cache/black-forest-labs--FLUX.1-dev
 clip_path: ViT-B/32 # or simply "ViT-B/32" and let transformers module do its job
-output_dir: experiments/train/train_sdxl_pure_hd
+output_dir: experiments/train/add_new_block_norm
 # vae_path: hf_cache/madebyollin--sdxl-vae-fp16-fix
 
 # UNet configs
@@ -10,7 +10,7 @@ skip_adapter_ratio: 0
 
 # subject extraction settings
 sub_feat_position: "before_sa" # where to extract subject feature: [before_sa], after_sa, after_ca, after_ff
-subject_timestep: 1
+subject_timestep: 2.0
 
 # text related settings
 drop_text_ratio: 0
@@ -19,7 +19,7 @@ remove_add_text_emb: false
 # datasets
 train_batch_size: 1
 train_data_ratio: 1
-resolution: 512
+resolution: 768
 drop_reference_ratio: 0
 with_rotation: false
 with_scale: false
@@ -44,7 +44,7 @@ youtubeVIS:
   meta: data/YoutubeVIS_ori/meta.json
 
 subject200k:
-  subset_size: 150000
+  subset_size: null
   data_path: "data/Subjects200K_collection3/extracted_pairs"
 
 subject200k_jigsaw:
@@ -57,12 +57,12 @@ vitonHD_dataset:
 
 # training
 num_train_epochs: 1
-checkpointing_steps: 1
-validation_steps: 1
-learning_rate: 0.0001
+checkpointing_steps: 1000
+validation_steps: 500
+learning_rate: 0.0003
 lr_scheduler: "constant"
 lr_warmup_steps: 0
-seed: 42
+seed: 19980701
 local_rank: -1
 dataloader_num_workers: 16
 
@@ -78,7 +78,7 @@ infer_logging_dir: logs_infer
 # validation and inference setting
 infer_steps: 20
 initial_loop: false
-split_ratio: 0.4
+split_ratio: 0.8
 
 # validation images
 target_prompt_1: "a backpack on the beach."
@@ -128,9 +128,9 @@ snr_gamma: null
 residual_connection: true
 variant: null
 config: dummy_config.yaml # dummy placeholder for argparser
-mixed_precision: 'fp16'
+mixed_precision: 'bf16'
 
 # configs used only during inference, no need to change
 do_editing: false # this is used 
-num_interations: -1
+num_interations: 3
 init_image_path: null

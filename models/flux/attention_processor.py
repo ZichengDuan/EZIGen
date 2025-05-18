@@ -598,10 +598,10 @@ class Attention(nn.Module):
 
         extra_kwargs = {key: cross_attention_kwargs[key] for key in unused_kwargs}
 
-        if len(unused_kwargs) > 0:
-            logger.warning(
-                f"cross_attention_kwargs {unused_kwargs} are not expected by {self.processor.__class__.__name__} and will be ignored."
-            )
+        # if len(unused_kwargs) > 0:
+        #     logger.warning(
+        #         f"cross_attention_kwargs {unused_kwargs} are not expected by {self.processor.__class__.__name__} and will be ignored."
+        #     )
         cross_attention_kwargs = {k: w for k, w in cross_attention_kwargs.items() if k in attn_parameters}
 
         return self.processor(
@@ -2293,15 +2293,32 @@ class FluxAttnProcessor2_0:
     ) -> torch.FloatTensor:
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
         subject_feature = extra_kwargs.get("subject_feature")
-        # if subject_feature is not None:
+        image_rotary_emb_extra = extra_kwargs.get("image_rotary_emb_extra")
+        is_cross_attn = extra_kwargs.get("is_cross_attn")
+        is_simple = extra_kwargs.get("is_simple")
+        is_pure_text = extra_kwargs.get("is_pure_text")
+        is_single = extra_kwargs.get("is_single")
+        noise_step = extra_kwargs.get("noise_step")
+        retrieve_subject_features = extra_kwargs.get("retrieve_subject_features")
+        # if retrieve_subject_features and is_single:
         #     breakpoint()
-        #     # subject_feature.shape: torch.Size([1, 1024, 3072]),m same as hidden_states
-        #     pass
-        
+
         # `sample` projections.
-        query = attn.to_q(hidden_states)
-        key = attn.to_k(hidden_states)
-        value = attn.to_v(hidden_states)
+        if subject_feature is not None:
+            # for cross attn
+            query = attn.to_q(hidden_states)
+            # key = attn.to_k(torch.cat([hidden_states, subject_feature], dim=1)) # cross attn
+            # value = attn.to_v(torch.cat([hidden_states, subject_feature], dim=1)) # cross attn
+            # key = attn.to_k(subject_feature) # cross attn
+            # value = attn.to_v(subject_feature) # cross attn
+            key = attn.to_k(hidden_states) # cross attn
+            value = attn.to_v(hidden_states) # cross attn
+            # new_x = x + Attn(x) -> new_x = Attn(x)
+        else:
+            # original 
+            query = attn.to_q(hidden_states)
+            key = attn.to_k(hidden_states)
+            value = attn.to_v(hidden_states)
 
         inner_dim = key.shape[-1]
         head_dim = inner_dim // attn.heads
@@ -2315,20 +2332,21 @@ class FluxAttnProcessor2_0:
         if attn.norm_k is not None:
             key = attn.norm_k(key)
         
-        if subject_feature is not None:
-            # do additional attention for reference feature
-            sub_query = attn.add_sub_to_q(subject_feature)
-            sub_key = attn.add_sub_to_k(subject_feature)
-            sub_value = attn.add_sub_to_v(subject_feature)
+        # if subject_feature is not None:
+        #     breakpoint()
+        #     # do additional attention for reference feature
+        #     sub_query = attn.to_q(subject_feature)
+        #     sub_key = attn.to_q(subject_feature)
+        #     sub_value = attn.to_q(subject_feature)
 
-            sub_query = sub_query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-            sub_key = sub_key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
-            sub_value = sub_value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        #     sub_query = sub_query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        #     sub_key = sub_key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        #     sub_value = sub_value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
-            if attn.add_sub_to_q is not None:
-                sub_query = attn.norm_added_sub_q(sub_query)
-            if attn.norm_k is not None:
-                sub_key = attn.norm_added_sub_k(sub_key)
+        #     if attn.norm_q is not None:
+        #         sub_query = attn.norm_q(sub_query)
+        #     if attn.norm_k is not None:
+        #         sub_key = attn.norm_k(sub_key)
             
         # the attention in FluxSingleTransformerBlock does not use `encoder_hidden_states`
         if encoder_hidden_states is not None:
@@ -2351,16 +2369,19 @@ class FluxAttnProcessor2_0:
             key = torch.cat([encoder_hidden_states_key_proj, key], dim=2)
             value = torch.cat([encoder_hidden_states_value_proj, value], dim=2)
 
-        if subject_feature is not None:
-            query = torch.cat([query, sub_query], dim=2)
-            key = torch.cat([key, sub_key], dim=2)
-            value = torch.cat([value, sub_value], dim=2)
+        # if subject_feature is not None:
+        #     query = torch.cat([query, sub_query], dim=2)
+        #     key = torch.cat([key, sub_key], dim=2)
+        #     value = torch.cat([value, sub_value], dim=2)
 
         if image_rotary_emb is not None:
             from diffusers.models.embeddings import apply_rotary_emb
             try:
                 query = apply_rotary_emb(query, image_rotary_emb)
-                key = apply_rotary_emb(key, image_rotary_emb)
+                if subject_feature is not None:
+                    key = apply_rotary_emb(key, image_rotary_emb_extra)
+                else:
+                    key = apply_rotary_emb(key, image_rotary_emb)
             except:
                 breakpoint()
 
@@ -2368,7 +2389,6 @@ class FluxAttnProcessor2_0:
         hidden_states = F.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
         )
-
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
 

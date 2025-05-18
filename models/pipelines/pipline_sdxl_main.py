@@ -1243,6 +1243,7 @@ class StableDiffusionXLPipeline_main(
                         progress_bar.update()
                     skipped_steps += 1
                     continue
+
                 
                 if subject_features is not None:
                     # if we are not dropping subject_features and we are in later timestep, we use designated feature

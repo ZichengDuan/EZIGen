@@ -4,6 +4,9 @@ prev_exp/*
 data
 data/*
 
+dreambooth
+dreambooth/*
+
 # 忽略 Python 编译文件和缓存目录
 *.py[cod]
 __pycache__/
@@ -18,7 +21,10 @@ __pycache__/
 
 venv/
 env/
-
+cache/
+cache/*
+dreambooth/*
+dreambooth
 .ipynb_checkpoints/
 
 .vscode/

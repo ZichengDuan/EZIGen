@@ -314,6 +314,8 @@ class DatasetCOCO_sdxl(Dataset):
         one_ids, two_ids = self.tokenize_text(caption)
         sub_one_ids, sub_two_ids = self.tokenize_text(subject_prompts)
         
+        subject_prompts = subject_prompts[0]
+        assert type(subject_prompts) == str and len(subject_prompts) > 1
         # return sample
         sample = {
             "target_image": target,
@@ -573,6 +575,9 @@ class DatasetCOCO_sd21(Dataset):
         one_ids = self.tokenize_text(caption)
         sub_one_ids = self.tokenize_text(subject_prompts)
         
+        subject_prompts = subject_prompts[0][0]
+        assert type(subject_prompts) == str and len(subject_prompts) > 1
+
         # return sample
         sample = {
             "target_image": target,
@@ -583,7 +588,7 @@ class DatasetCOCO_sd21(Dataset):
             "padding_num": padding_num,
             "img_per_batch": sub_imgs.shape[0],
             "dataset_name": "coco2014",
-            "subject_prompt": subject_prompts,
+            "subject_prompt": subject_prompts[0][0],
             "target_prompt": caption,
             "pil_sub_images": pil_sub_images,
         }

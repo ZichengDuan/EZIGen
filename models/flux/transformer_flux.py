@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import torch.nn.functional as F
 
 from typing import Any, Dict, Optional, Tuple, Union
 
@@ -88,14 +88,64 @@ class FluxSingleTransformerBlock(nn.Module):
     ) -> torch.Tensor:
         residual = hidden_states
         norm_hidden_states, gate = self.norm(hidden_states, emb=temb)
+
+        norm_hidden_states_ori = norm_hidden_states
+
         mlp_hidden_states = self.act_mlp(self.proj_mlp(norm_hidden_states))
+
+        # process subject
+        subject_feature = extra_kwargs.get("subject_feature")
+        if subject_feature is not None:
+            norm_subject_feature, _ = self.sub_norm(subject_feature, emb=temb)
+            extra_kwargs["subject_feature"] = norm_subject_feature
+        else:
+            norm_subject_feature = None
+            extra_kwargs["subject_feature"] = None
+            
+
         joint_attention_kwargs = joint_attention_kwargs or {}
+
+        # since we are doing outside
+        extra_kwargs["subject_feature"] = None
+
         attn_output = self.attn(
             hidden_states=norm_hidden_states,
             image_rotary_emb=image_rotary_emb,
             **joint_attention_kwargs,
             **extra_kwargs
         )
+
+        # if subject_feature is not None:
+        #     # sub_gate = sub_gate.unsqueeze(1)
+        #     breakpoint()
+        
+        # do ip-adapter stuff
+        if norm_subject_feature is not None:
+            # dzcdzc: do ip-adapter staff
+            sub_query = self.attn.to_q(norm_hidden_states_ori) # norm query
+
+            inner_dim = sub_query.shape[-1]
+            head_dim = inner_dim // self.attn.heads
+            batch_size = hidden_states.shape[0]
+
+            sub_query = sub_query.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
+            sub_query = self.attn.norm_q(sub_query)
+
+            sub_key = self.attn.sub_to_k(norm_subject_feature)
+            sub_key = sub_key.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
+            sub_key = self.attn.sub_norm_k(sub_key)
+
+            sub_value = self.attn.sub_to_v(norm_subject_feature)
+            sub_value = sub_value.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
+
+            sub_attn = F.scaled_dot_product_attention(
+                sub_query, sub_key, sub_value
+            )
+
+            sub_attn = sub_attn.transpose(1, 2).reshape(batch_size, -1, self.attn.heads * head_dim)
+
+            attn_output = attn_output + sub_attn
+
 
         hidden_states = torch.cat([attn_output, mlp_hidden_states], dim=2)
         gate = gate.unsqueeze(1)
@@ -146,13 +196,24 @@ class FluxTransformerBlock(nn.Module):
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
         **extra_kwargs
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        subject_feature = extra_kwargs.get("subject_feature")
+
         norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.norm1(hidden_states, emb=temb)
 
-        norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(
-            encoder_hidden_states, emb=temb
-        )
+        norm_hidden_states_ori = norm_hidden_states
+
+        if subject_feature is not None:
+            norm_subject_feature, sub_gate_msa, sub_shift_mlp, sub_scale_mlp, sub_gate_mlp = self.sub_norm(subject_feature, emb=temb)
+            extra_kwargs["subject_feature"] = norm_subject_feature
+        else:
+            norm_subject_feature = None
+            
+        norm_encoder_hidden_states, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.norm1_context(encoder_hidden_states, emb=temb)
         joint_attention_kwargs = joint_attention_kwargs or {}
-        # Attention.
+        # dzcdzc
+
+        # since we are doing outside
+        extra_kwargs["subject_feature"] = None
         attention_outputs = self.attn(
             hidden_states=norm_hidden_states,
             encoder_hidden_states=norm_encoder_hidden_states,
@@ -167,11 +228,7 @@ class FluxTransformerBlock(nn.Module):
 
         # Process attention outputs for the `hidden_states`.
         attn_output = gate_msa.unsqueeze(1) * attn_output
-        try:
-            hidden_states = hidden_states + attn_output # [1, 16, 64, 3072], [1, 1024, 3072]
-        except:
-            # dzc: only preserve the latent part
-            hidden_states = hidden_states + attn_output[:, hidden_states.shape[1]:, :]
+        hidden_states = hidden_states + attn_output # [1, 16, 64, 3072], [1, 1024, 3072]
 
         norm_hidden_states = self.norm2(hidden_states)
         norm_hidden_states = norm_hidden_states * (1 + scale_mlp[:, None]) + shift_mlp[:, None]
@@ -195,6 +252,32 @@ class FluxTransformerBlock(nn.Module):
         encoder_hidden_states = encoder_hidden_states + c_gate_mlp.unsqueeze(1) * context_ff_output
         if encoder_hidden_states.dtype == torch.float16:
             encoder_hidden_states = encoder_hidden_states.clip(-65504, 65504)
+
+        if norm_subject_feature is not None:
+            # dzcdzc: do ip-adapter staff
+            sub_query = self.attn.to_q(norm_hidden_states_ori) # norm query
+
+            inner_dim = sub_query.shape[-1]
+            head_dim = inner_dim // self.attn.heads
+            batch_size = hidden_states.shape[0]
+
+            sub_query = sub_query.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
+            sub_query = self.attn.norm_q(sub_query)
+
+            sub_key = self.attn.sub_to_k(norm_subject_feature)
+            sub_key = sub_key.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
+            sub_key = self.attn.sub_norm_k(sub_key)
+
+            sub_value = self.attn.sub_to_v(norm_subject_feature)
+            sub_value = sub_value.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
+
+            sub_attn = F.scaled_dot_product_attention(
+                sub_query, sub_key, sub_value
+            )
+
+            sub_attn = sub_attn.transpose(1, 2).reshape(batch_size, -1, self.attn.heads * head_dim)
+
+            hidden_states = hidden_states + sub_attn
 
         return encoder_hidden_states, hidden_states
 
@@ -479,12 +562,14 @@ class FluxTransformer2DModel(
             )
             img_ids = img_ids[0]
 
-        if extra_kwargs.get("subject_features") is not None and len(extra_kwargs.get("subject_features")) > 0:
-            ids = torch.cat((txt_ids, img_ids, img_ids), dim=0) # dzc: for subject feature
-        else:
-            ids = torch.cat((txt_ids, img_ids), dim=0)
+        # if extra_kwargs.get("subject_features") is not None and len(extra_kwargs.get("subject_features")) > 0:
+        #     ids = torch.cat((txt_ids, img_ids, img_ids), dim=0) # dzc: for subject feature
+        # else:
+        #     ids = torch.cat((txt_ids, img_ids), dim=0)
+        if_pure_text = extra_kwargs.get("if_pure_text")
 
-        image_rotary_emb = self.pos_embed(ids)
+        image_rotary_emb_extra = self.pos_embed(torch.cat((txt_ids, img_ids, img_ids), dim=0))
+        image_rotary_emb_extra_single = self.pos_embed(torch.cat((txt_ids, img_ids, txt_ids, img_ids), dim=0))
         image_rotary_emb_origin = self.pos_embed(torch.cat((txt_ids, img_ids), dim=0))
 
         if joint_attention_kwargs is not None and "ip_adapter_image_embeds" in joint_attention_kwargs:
@@ -492,6 +577,9 @@ class FluxTransformer2DModel(
             ip_hidden_states = self.encoder_hid_proj(ip_adapter_image_embeds)
             joint_attention_kwargs.update({"ip_hidden_states": ip_hidden_states})
 
+        is_train = extra_kwargs.get("is_train")
+        # if is_train:
+        #     breakpoint()
         if extra_kwargs.get("retrieve_subject_features") == True:
             subject_features = []
             retrieve_model = True
@@ -502,6 +590,7 @@ class FluxTransformer2DModel(
         if extra_kwargs.get("subject_features") is not None and len(extra_kwargs.get("subject_features")) > 0:
             subject_features = extra_kwargs.get("subject_features")
             retrieve_model = False
+        
         for index_block, block in enumerate(self.transformer_blocks):
             if torch.is_grad_enabled() and self.gradient_checkpointing:
                 encoder_hidden_states, hidden_states = self._gradient_checkpointing_func(
@@ -511,34 +600,35 @@ class FluxTransformer2DModel(
                     temb,
                     image_rotary_emb,
                 )
-
             else:
-                # before each multi-model block
                 if subject_features is not None and retrieve_model:
                     subject_features.append(hidden_states)
+                # vanilla block
                 encoder_hidden_states, hidden_states = block(
                     hidden_states=hidden_states, # [1, n_tokens, dim(3072)]
                     encoder_hidden_states=encoder_hidden_states, # [1, 512, 3072]
                     temb=temb, # 
-                    image_rotary_emb=image_rotary_emb,
+                    image_rotary_emb=image_rotary_emb_origin,
                     joint_attention_kwargs=joint_attention_kwargs,
+                    # **extra_kwargs
                     subject_feature = subject_features[index_block] if (not retrieve_model and subject_features) else None,
+                    image_rotary_emb_extra=image_rotary_emb_extra,
                     **extra_kwargs
                 )
-                if extra_kwargs.get("retrieve_subject_features") == False:
-                    breakpoint()
-            # # controlnet residual
-            # if controlnet_block_samples is not None:
-            #     interval_control = len(self.transformer_blocks) / len(controlnet_block_samples)
-            #     interval_control = int(np.ceil(interval_control))
-            #     # For Xlabs ControlNet.
-            #     if controlnet_blocks_repeat:
-            #         hidden_states = (
-            #             hidden_states + controlnet_block_samples[index_block % len(controlnet_block_samples)]
-            #         )
-            #     else:
-            #         hidden_states = hidden_states + controlnet_block_samples[index_block // interval_control]
-        
+
+                # if subject_features is not None and not retrieve_model:
+                #     # dzc: apply cross attn block
+                #     hidden_states = cross_attn_block(
+                #         hidden_states=hidden_states, # [1, n_tokens, dim(3072)]
+                #         temb=temb, # 
+                #         image_rotary_emb=image_rotary_emb_origin,
+                #         encoder_hidden_states=encoder_hidden_states,
+                #         joint_attention_kwargs=joint_attention_kwargs,
+                #         subject_feature = subject_features[index_block],
+                #         is_cross_attn = True,
+                #         **extra_kwargs
+                #     )
+
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
         for index_block, block in enumerate(self.single_transformer_blocks):
@@ -551,22 +641,37 @@ class FluxTransformer2DModel(
                 )
 
             else:
+                # after each multi-model block
+                if subject_features is not None and retrieve_model:
+                    subject_features.append(hidden_states)
+
                 hidden_states = block(
                     hidden_states=hidden_states,
                     temb=temb,
                     image_rotary_emb=image_rotary_emb_origin,
                     joint_attention_kwargs=joint_attention_kwargs,
+                    is_single=True,
+                    subject_feature = subject_features[len(self.transformer_blocks) + index_block] if (not retrieve_model and subject_features) else None,
+                    image_rotary_emb_extra = image_rotary_emb_extra_single,
                     **extra_kwargs
                 )
 
-            # controlnet residual
-            if controlnet_single_block_samples is not None:
-                interval_control = len(self.single_transformer_blocks) / len(controlnet_single_block_samples)
-                interval_control = int(np.ceil(interval_control))
-                hidden_states[:, encoder_hidden_states.shape[1] :, ...] = (
-                    hidden_states[:, encoder_hidden_states.shape[1] :, ...]
-                    + controlnet_single_block_samples[index_block // interval_control]
-                )
+                # if not retrieve_model and subject_features is not None:
+                #     breakpoint()
+
+                # if subject_features is not None and not retrieve_model:
+                #     # dzc: apply cross attn block
+                #     hidden_states = cross_attn_block(
+                #         hidden_states=hidden_states, # [1, n_tokens, dim(3072)]
+                #         temb=temb, # 
+                #         image_rotary_emb=image_rotary_emb_origin,
+                #         image_rotary_emb_extra=image_rotary_emb_extra,
+                #         joint_attention_kwargs=joint_attention_kwargs,
+                #         subject_feature = subject_features[index_block],
+                #         is_cross_attn = True,
+                #         **extra_kwargs
+                #     )
+
 
         hidden_states = hidden_states[:, encoder_hidden_states.shape[1] :, ...]
 

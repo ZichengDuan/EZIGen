@@ -1,7 +1,7 @@
 #!/bin/zsh
 export NCCL_DEBUG=INFO
 # 默认 config 文件
-DEFAULT_CONFIG="configs/train_config_sdxl.yaml"
+DEFAULT_CONFIG="configs/flux/train_config_flux_pure_hd.yaml"
 
 # 解析命令行参数
 while [ $# -gt 0 ]; do
@@ -34,6 +34,6 @@ echo "Detected $NUM_GPUS GPU(s), using config: $CONFIG_FILE"
 echo "Training with additional config: $CONFIG_PATH"
 
 # 运行训练
-# accelerate launch --config_file accelerate_configs/$CONFIG_FILE train_sdxl.py --config "$CONFIG_PATH"
-python train_flux.py --config "$CONFIG_PATH"
+accelerate launch --config_file /datastore/zha414/dzc/Projects/CogVideo/finetune/accelerate_config_4gpu_bf16.yaml train_flux.py --config "$CONFIG_PATH"
+# python train_flux.py --config "$CONFIG_PATH"
 # torchrun --nproc_per_node=$NUM_GPUS --nnodes=1 --master_port=2614 train_sdxl.py --config "$CONFIG_PATH"

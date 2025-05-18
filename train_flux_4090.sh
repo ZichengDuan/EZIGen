@@ -2,8 +2,9 @@
 export NCCL_DEBUG=INFO
 export NCCL_P2P_DISABLE="1"
 export NCCL_IB_DISABLE="1"
+export CUDA_VISIBLE_DEVICES=0
 # 默认 config 文件
-DEFAULT_CONFIG="configs/flux/train_config_sdxl_pure_hd.yaml"
+DEFAULT_CONFIG="configs/flux/train_config_flux_pure_hd_4090.yaml"
 
 # 解析命令行参数
 while [ $# -gt 0 ]; do

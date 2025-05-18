@@ -874,14 +874,23 @@ def add_noise_to_image(noise_step, args, img: PIL.Image, vae, train_transforms, 
 
 def get_sigmas(timesteps, noise_scheduler, n_dim=4, dtype=torch.float32, device="cuda"):
     sigmas = noise_scheduler.sigmas.to(device=device, dtype=dtype)
-    schedule_timesteps = noise_scheduler.timesteps.to(device).to(torch.float16)
-    schedule_timesteps = schedule_timesteps.to(torch.int)
-    timesteps = timesteps.to(device).to(torch.float16)
+
+    schedule_timesteps = noise_scheduler.timesteps.to(device=device)
+    timesteps = timesteps.to(device=device)
+
+    if len(schedule_timesteps) > 500:
+        schedule_timesteps = torch.linspace(1000, 1, steps=1000).round().to(torch.int).to(device=device)
+        timesteps = timesteps.to(torch.int)
+    else:
+        schedule_timesteps = schedule_timesteps.to(dtype)
+
+
     try:
         step_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
     except:
+        breakpoint()
         print(schedule_timesteps, timesteps)
-        raise Exception
+        # raise Exception
             
     sigma = sigmas[step_indices].flatten()
     while len(sigma.shape) < n_dim:
@@ -1372,6 +1381,10 @@ def extract_subject_features_sdxl(args, image_paths, reference_unet, text_encode
         noised_ref_image.save("noised_ref_image.png")
 
     return subject_features
+
+
+# def extract_subject_features_flux():
+
 
 
 def visualize_latent(latent: torch.Tensor, vae, generator=None):
@@ -1946,7 +1959,17 @@ def extract_original_image(original_size, img_1024):
 
     return img_extracted
 
-
+def calculate_shift(
+    image_seq_len,
+    base_seq_len: int = 256,
+    max_seq_len: int = 4096,
+    base_shift: float = 0.5,
+    max_shift: float = 1.15,
+):
+    m = (max_shift - base_shift) / (max_seq_len - base_seq_len)
+    b = base_shift - m * base_seq_len
+    mu = image_seq_len * m + b
+    return mu
 
 def random_based_on_time():
     # 获取当前时间
@@ -2193,6 +2216,14 @@ def _encode_prompt_with_clip(
 
     return prompt_embeds
 
+### Get target text emb
+def compute_text_embeddings(prompt, text_encoders, tokenizers):
+    with torch.no_grad():
+        prompt_embeds, pooled_prompt_embeds, text_ids = encode_prompt(text_encoders, tokenizers, prompt, 512)
+        prompt_embeds = prompt_embeds.to(text_encoders[0].device)
+        pooled_prompt_embeds = pooled_prompt_embeds.to(text_encoders[0].device)
+        text_ids = text_ids.to(text_encoders[0].device)
+    return prompt_embeds, pooled_prompt_embeds, text_ids
 
 def encode_prompt(
     text_encoders,
@@ -2284,27 +2315,28 @@ def unpack_latents(latents, height, width, vae_scale_factor):
     return latents
 
 
-def add_noise_to_image_flux(img, vae, noise_step, noise_scheduler, train_transforms=None):
+
+
+def add_noise_to_image_flux(img, vae, noise_step, noise_scheduler, train_transforms=None, noise=None):
     if isinstance(img, PIL.Image.Image):
         # encode PIL image
         img = train_transforms(img).unsqueeze(0).to(vae.device)
 
-    latent = vae.encode(img.to(vae.dtype)).latent_dist.sample()
+    latent = vae.encode(img.to(device=vae.device, dtype=vae.dtype)).latent_dist.sample()
+    latent = (latent - vae.config.shift_factor) * vae.config.scaling_factor # sumn: 20864
     # latent = latent * vae.config.scaling_factor
-    noise = torch.randn_like(latent, dtype=vae.dtype)
-    
+
+    if noise is None:
+        noise = torch.randn_like(latent)
+    noise = noise.to(device=vae.device, dtype=vae.dtype) # tensor(49.5000
     # Sample a random timestep for each image
     # for weighting schemes where we sample timesteps non-uniformly
-    u = compute_density_for_timestep_sampling(weighting_scheme=None,batch_size=1,logit_mean=0.0,logit_std=1.0,mode_scale=1.29)
-    indices = (u * noise_scheduler.config.num_train_timesteps).long()
 
-
-    # timesteps = noise_scheduler.timesteps[indices].to(device=latent.device, dtype=weight_dtype)
     timesteps = torch.tensor([noise_step]).to(device=latent.device, dtype=vae.dtype)
 
     # Add noise according to flow matching.
     # zt = (1 - texp) * x + texp * z1
-    sigmas = get_sigmas(timesteps, noise_scheduler, n_dim=latent.ndim, dtype=latent.dtype, device=vae.device)
+    sigmas = get_sigmas(timesteps, noise_scheduler, n_dim=latent.ndim, dtype=latent.dtype, device=vae.device) # tensor([[[[0.0010]]]]
     noisy_latent = (1.0 - sigmas) * latent + sigmas * noise
 
     return noisy_latent
