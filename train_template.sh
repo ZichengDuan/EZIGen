@@ -1,39 +1,18 @@
-#!/bin/zsh
-export NCCL_DEBUG=INFO
-export NO_ALBUMENTATIONS_UPDATE=1
+# python train/train_distill_align_feat.py --config_path configs/distill_align_feat/wan14B_2_wan1_3B.yaml
+# accelerate launch --config_file configs/accelerate/4gpu_bf16.yaml train/train_distill_align_feat.py --config_path configs/distill_align_feat/wan14B_2_wan1_3B.yaml
+
+#!/bin/bash
 
 # === 手动定义节点名和每个节点的 GPU 编号 ===
 NODES=("g081" "g067" "g092")  # 顺序决定 node_rank
-NODES=("g107" "g085")  # 顺序决定 node_rank
-# NODES=("g085")
+NODES=("g093" "g054")  # 顺序决定 node_rank
+# NODES=("g092")
 CUDA_VISIBLE_DEVICES_LIST=("0,1,2,3" "0,1,2,3" "0,1")  # 一一对应
 CUDA_VISIBLE_DEVICES_LIST=("0,1,2,3" "0,1,2,3")  # 一一对应
-# CUDA_VISIBLE_DEVICES_LIST=("0,1,2")  # 一一对应
 # CUDA_VISIBLE_DEVICES_LIST=("0")  # 一一对应
 
 # === 自动识别当前节点名 ===
 HOSTNAME=$(hostname)
-
-
-# 默认 config 文件
-DEFAULT_CONFIG="configs/flux/flux_vanilla_ft.yaml"
-
-# 解析命令行参数
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --config)
-      CONFIG_PATH="$2"
-      shift 2  # 跳过 --config 和参数值
-      ;;
-    *)
-      echo "Unknown option: $1"
-      exit 1
-      ;;
-  esac
-done
-
-# 如果没有提供 --config 参数，则使用默认值
-CONFIG_PATH=${CONFIG_PATH:-$DEFAULT_CONFIG}
 
 # === 查找当前节点对应的 node_rank 和 CUDA_VISIBLE_DEVICES ===
 for i in "${!NODES[@]}"; do
@@ -59,8 +38,7 @@ echo "NODE_RANK=$NODE_RANK"
 echo "MASTER_ADDR=$MASTER_ADDR"
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 
-# 运行训练
-# accelerate launch --config_file /datastore/zha414/dzc/Projects/CogVideo/finetune/accelerate_config_4gpu_bf16.yaml train_flux.py --config "$CONFIG_PATH"
+# === 启动 accelerate launch ===
 torchrun \
     --nproc_per_node=$GPUS_PER_NODE \
     --nnodes=$NNODES \
@@ -68,5 +46,5 @@ torchrun \
     --rdzv_id=5235 \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_ADDR:29500 \
-    train_flux.py --config "$CONFIG_PATH"
-# torchrun --nproc_per_node=$NUM_GPUS --nnodes=1 --master_port=2614 train_sdxl.py --config "$CONFIG_PATH"
+    causvid/train_distillation.py \
+    --config_path  configs/wan_causal_dmd_1_frame.yaml

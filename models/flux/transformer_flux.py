@@ -37,9 +37,11 @@ from diffusers.utils import USE_PEFT_BACKEND, deprecate, logging, scale_lora_lay
 from diffusers.utils.import_utils import is_torch_npu_available
 from diffusers.utils.torch_utils import maybe_allow_in_graph
 from diffusers.models.cache_utils import CacheMixin
-from diffusers.models.embeddings import CombinedTimestepGuidanceTextProjEmbeddings, CombinedTimestepTextProjEmbeddings, FluxPosEmbed
+from diffusers.models.embeddings import CombinedTimestepGuidanceTextProjEmbeddings, CombinedTimestepTextProjEmbeddings
 from diffusers.models.modeling_outputs import Transformer2DModelOutput
 
+# dzc
+from models.embeddings import FluxPosEmbed
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -105,8 +107,8 @@ class FluxSingleTransformerBlock(nn.Module):
 
         joint_attention_kwargs = joint_attention_kwargs or {}
 
-        # since we are doing outside
-        extra_kwargs["subject_feature"] = None
+        # # since we are doing outside
+        # extra_kwargs["subject_feature"] = None
 
         attn_output = self.attn(
             hidden_states=norm_hidden_states,
@@ -120,33 +122,33 @@ class FluxSingleTransformerBlock(nn.Module):
         #     breakpoint()
         
         # do ip-adapter stuff
-        if norm_subject_feature is not None:
-            # dzcdzc: do ip-adapter staff
-            sub_query = self.attn.to_q(norm_hidden_states_ori) # norm query
+        # if norm_subject_feature is not None:
+        #     # dzcdzc: do ip-adapter staff
+        #     sub_query = self.attn.to_q(norm_hidden_states_ori) # norm query
 
-            inner_dim = sub_query.shape[-1]
-            head_dim = inner_dim // self.attn.heads
-            batch_size = hidden_states.shape[0]
+        #     inner_dim = sub_query.shape[-1]
+        #     head_dim = inner_dim // self.attn.heads
+        #     batch_size = hidden_states.shape[0]
 
-            sub_query = sub_query.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
-            sub_query = self.attn.norm_q(sub_query)
+        #     sub_query = sub_query.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
+        #     sub_query = self.attn.norm_q(sub_query)
 
-            sub_key = self.attn.sub_to_k(norm_subject_feature)
-            sub_key = sub_key.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
-            sub_key = self.attn.sub_norm_k(sub_key)
+        #     sub_key = self.attn.sub_to_k(norm_subject_feature)
+        #     sub_key = sub_key.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
+        #     sub_key = self.attn.sub_norm_k(sub_key)
 
-            sub_value = self.attn.sub_to_v(norm_subject_feature)
-            sub_value = sub_value.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
+        #     sub_value = self.attn.sub_to_v(norm_subject_feature)
+        #     sub_value = sub_value.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
 
-            sub_attn = F.scaled_dot_product_attention(
-                sub_query, sub_key, sub_value
-            )
+        #     sub_attn = F.scaled_dot_product_attention(
+        #         sub_query, sub_key, sub_value
+        #     )
 
-            sub_attn = sub_attn.transpose(1, 2).reshape(batch_size, -1, self.attn.heads * head_dim)
+        #     sub_attn = sub_attn.transpose(1, 2).reshape(batch_size, -1, self.attn.heads * head_dim)
 
-            attn_output = attn_output + sub_attn
+        #     attn_output = attn_output + sub_attn
 
-
+        
         hidden_states = torch.cat([attn_output, mlp_hidden_states], dim=2)
         gate = gate.unsqueeze(1)
         hidden_states = gate * self.proj_out(hidden_states)
@@ -253,31 +255,31 @@ class FluxTransformerBlock(nn.Module):
         if encoder_hidden_states.dtype == torch.float16:
             encoder_hidden_states = encoder_hidden_states.clip(-65504, 65504)
 
-        if norm_subject_feature is not None:
-            # dzcdzc: do ip-adapter staff
-            sub_query = self.attn.to_q(norm_hidden_states_ori) # norm query
+        # if norm_subject_feature is not None:
+        #     # dzcdzc: do ip-adapter staff
+        #     sub_query = self.attn.to_q(norm_hidden_states_ori) # norm query
 
-            inner_dim = sub_query.shape[-1]
-            head_dim = inner_dim // self.attn.heads
-            batch_size = hidden_states.shape[0]
+        #     inner_dim = sub_query.shape[-1]
+        #     head_dim = inner_dim // self.attn.heads
+        #     batch_size = hidden_states.shape[0]
 
-            sub_query = sub_query.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
-            sub_query = self.attn.norm_q(sub_query)
+        #     sub_query = sub_query.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
+        #     sub_query = self.attn.norm_q(sub_query)
 
-            sub_key = self.attn.sub_to_k(norm_subject_feature)
-            sub_key = sub_key.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
-            sub_key = self.attn.sub_norm_k(sub_key)
+        #     sub_key = self.attn.sub_to_k(norm_subject_feature)
+        #     sub_key = sub_key.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
+        #     sub_key = self.attn.sub_norm_k(sub_key)
 
-            sub_value = self.attn.sub_to_v(norm_subject_feature)
-            sub_value = sub_value.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
+        #     sub_value = self.attn.sub_to_v(norm_subject_feature)
+        #     sub_value = sub_value.view(batch_size, -1, self.attn.heads, head_dim).transpose(1, 2)
 
-            sub_attn = F.scaled_dot_product_attention(
-                sub_query, sub_key, sub_value
-            )
+        #     sub_attn = F.scaled_dot_product_attention(
+        #         sub_query, sub_key, sub_value
+        #     )
 
-            sub_attn = sub_attn.transpose(1, 2).reshape(batch_size, -1, self.attn.heads * head_dim)
+        #     sub_attn = sub_attn.transpose(1, 2).reshape(batch_size, -1, self.attn.heads * head_dim)
 
-            hidden_states = hidden_states + sub_attn
+        #     hidden_states = hidden_states + sub_attn
 
         return encoder_hidden_states, hidden_states
 
@@ -568,8 +570,11 @@ class FluxTransformer2DModel(
         #     ids = torch.cat((txt_ids, img_ids), dim=0)
         if_pure_text = extra_kwargs.get("if_pure_text")
 
-        image_rotary_emb_extra = self.pos_embed(torch.cat((txt_ids, img_ids, img_ids), dim=0))
-        image_rotary_emb_extra_single = self.pos_embed(torch.cat((txt_ids, img_ids, txt_ids, img_ids), dim=0))
+        ref_img_ids = img_ids.clone()
+        ref_img_ids[:, 2] += 32
+        
+        image_rotary_emb_extra = self.pos_embed(torch.cat((txt_ids, img_ids, ref_img_ids), dim=0))
+        image_rotary_emb_extra_single = self.pos_embed(torch.cat((txt_ids, img_ids, txt_ids, ref_img_ids), dim=0))
         image_rotary_emb_origin = self.pos_embed(torch.cat((txt_ids, img_ids), dim=0))
 
         if joint_attention_kwargs is not None and "ip_adapter_image_embeds" in joint_attention_kwargs:
@@ -610,9 +615,8 @@ class FluxTransformer2DModel(
                     temb=temb, # 
                     image_rotary_emb=image_rotary_emb_origin,
                     joint_attention_kwargs=joint_attention_kwargs,
-                    # **extra_kwargs
-                    subject_feature = subject_features[index_block] if (not retrieve_model and subject_features) else None,
-                    image_rotary_emb_extra=image_rotary_emb_extra,
+                    # subject_feature = subject_features[index_block] if (not retrieve_model and subject_features) else None,
+                    # image_rotary_emb_extra=image_rotary_emb_extra,
                     **extra_kwargs
                 )
 

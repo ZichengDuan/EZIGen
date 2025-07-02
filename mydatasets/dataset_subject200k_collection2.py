@@ -50,8 +50,31 @@ class Subject200k_dataset_parquet_collection2(Dataset):
 
         image = row['image']
         width, height = image.size
-        left_image = image.crop((0, 0, width // 2, height))
-        right_image = image.crop((width // 2, 0, width, height))
+        # left_image = image.crop((0, 0, width // 2, height))
+        # right_image = image.crop((width // 2, 0, width, height))
+        
+        # 查找白色分界线
+        dividing_line = None
+        for x in range(width):
+            if abs(x - width // 2) > width // 6:  # 确保分界线在图像中线左右1/6的位置
+                continue
+            
+            white_count = 0
+            for y in range(height):
+                r, g, b = image.getpixel((x, y))
+                if r > 190 and g > 190 and b > 190:  # 假设白色背景是接近(255,255,255)的
+                    white_count += 1
+                    
+            if white_count / height >= 0.95:
+                dividing_line = x
+                break
+                
+        if dividing_line is not None:
+            left_image = image.crop((0, 0, dividing_line, height)).resize((1024, 1024))
+            right_image = image.crop((dividing_line, 0, width, height)).resize((1024, 1024))
+        else:
+            left_image = image.crop((0, 0, width // 2, height))
+            right_image = image.crop((width // 2, 0, width, height))
 
         right_description = row['description']['item']
         left_description = right_description[:-1] + " " + row['description']['description_0']

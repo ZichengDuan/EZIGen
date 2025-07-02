@@ -3,3 +3,4 @@ from .main_unet import *
 from .pipelines import *
 from .reference_unet import *
 from .flux import *
+from .embeddings import *

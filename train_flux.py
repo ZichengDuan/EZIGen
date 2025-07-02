@@ -509,11 +509,14 @@ def init_accelerator(args):
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
     accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=logging_dir)
     
+    deepspeed_plugin = DeepSpeedPlugin(hf_ds_config=args.deepspeed_config_path, zero3_init_flag=False)
+    deepspeed_plugin.deepspeed_config['train_micro_batch_size_per_gpu'] = args.train_batch_size
+    
     # deepspeed_plugin = DeepSpeedPlugin(hf_ds_config='accelerate_configs/deepspeed_config.json', zero3_init_flag=True)
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
-        # deepspeed_plugin=deepspeed_plugin,
+        deepspeed_plugin=deepspeed_plugin,
         log_with=args.report_to,
         project_config=accelerator_project_config,
         kwargs_handlers=[InitProcessGroupKwargs(backend="nccl", timeout=timedelta(seconds=60*60))]
@@ -630,6 +633,40 @@ def load_checkpoint(accelerator, args):
     accelerator.print(f"Resuming from checkpoint {args.checkpoint_path}")
     accelerator.load_state(args.checkpoint_path)
     
+def collate_fn(examples):
+        target_image = torch.stack([example["target_image"] for example in examples]) 
+        target_image = target_image.to(memory_format=torch.contiguous_format).float()
+            
+        # input_ids_one = torch.stack([example["input_ids"] for example in examples])
+        # subject_input_ids_one = torch.vstack([padding_subjects(example["subject_input_ids"], example["padding_num"]) for example in examples])
+        
+        # input_ids_two = torch.stack([example["input_ids_two"] for example in examples])
+        # subject_input_ids_two = torch.vstack([padding_subjects(example["subject_input_ids_two"], example["padding_num"]) for example in examples])
+        
+        subject_images = torch.vstack([example["subject_images"] for example in examples]) # B * N, C, W, H
+        # we need to mask out the black padded subject imagee
+        # padding_nums = torch.tensor([example["padding_num"] for example in examples])
+        
+        # if not args.with_staged_timestep:
+        #     timesteps = torch.randint(0, 1000, (args.train_batch_size, ))
+        # else:
+        #     # some training hyperparams
+        #     timesteps = []
+        #     for example in examples: # following anydoor [0 ... High Res ... T/2 ... Low Res ... T]
+        #         if example["dataset_name"] in ["vitonHD", "youtubeVIS", "coco2014"]: # low quality for the early stages 
+        #             timesteps.append(min(random.randint(int(noise_scheduler.config.num_train_timesteps // 3), noise_scheduler.config.num_train_timesteps - 1), 999))
+        #         else:
+        #             t = random.randint(0, int(2 * noise_scheduler.config.num_train_timesteps // 3 - 1))
+        #             timesteps.append(min(t, 999))
+            
+        #     timesteps = torch.tensor(timesteps).reshape((args.train_batch_size,))
+
+        # target_noise = torch.randn((args.train_batch_size, 16, args.resolution // 8, args.resolution // 8), dtype=weight_dtype)
+        # subject_noise = torch.randn((1, 16, args.resolution // 8, args.resolution // 8), dtype=weight_dtype)
+        target_prompt = [example["target_prompt"] for example in examples]
+        subject_prompt = [example["subject_prompt"][0] if type(example["subject_prompt"]) == list else example["subject_prompt"] for example in examples]
+        subject_prompt = [example["subject_prompt"] for example in examples]
+        return {"target_image": target_image, "input_ids_one": None, "input_ids_two": None,  "subject_input_ids_one": None, "subject_input_ids_two": None, "subject_images": subject_images, "padding_num": None, "dataset_name": [example["dataset_name"] for example in examples], "timesteps": None, "target_prompt": target_prompt, "subject_prompt": subject_prompt, "target_noise": None, "subject_noise": None}
 
 def load_pipelines(pipeline_modules, flux_transformer_copy, weight_dtype, args):
     # pipeline = StableDiffusionPipeline_main.from_pretrained(
@@ -680,8 +717,6 @@ def main(config_path=None, config_file=None):
     args = parse_args_from_yaml(config_path=config_path, config_file=config_file)
     set_seed(args.seed)
     
-    
-    
     # Make one log on every process with the configuration for debugging.
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -695,7 +730,7 @@ def main(config_path=None, config_file=None):
     # Handle the repository creation
     if accelerator.is_main_process:
         os.makedirs(args.output_dir, exist_ok=True)
-
+    
     weight_dtype = torch.float32
     if accelerator.mixed_precision == "fp16":
         weight_dtype = torch.float16
@@ -735,7 +770,6 @@ def main(config_path=None, config_file=None):
         return get_peft_model(module, config)
 
     
-
     # # set which parameter is trainable, the addtional qkv
     # flux_transformer.cross_attn_transformer_blocks = copy.deepcopy(flux_transformer.transformer_blocks)
     # flux_transformer.add_module("cross_attn_transformer_blocks", flux_transformer.cross_attn_transformer_blocks)
@@ -768,44 +802,51 @@ def main(config_path=None, config_file=None):
         # nsformer.transformer_blocks[i].add_module("cross_attn", flux_transformer.transformer_blocks[i].cross_attn)
         block.sub_norm = copy.deepcopy(block.norm1)
         block.add_module("sub_norm", block.sub_norm)
+        block.sub_norm.requires_grad_(True)
         
         attn = block.attn
         attn.sub_to_k = copy.deepcopy(attn.to_k)
         attn.add_module("sub_to_k", attn.sub_to_k)
+        attn.sub_to_k.requires_grad_(True)
 
         attn.sub_to_v = copy.deepcopy(attn.to_v)
         attn.add_module("sub_to_v", attn.sub_to_v)
-
-        attn.sub_norm_k = copy.deepcopy(attn.norm_k)
-        attn.add_module("sub_norm_k", attn.sub_norm_k)
-
-        block.sub_norm.requires_grad_(True)
-        attn.sub_to_k.requires_grad_(True)
         attn.sub_to_v.requires_grad_(True)
-        attn.sub_norm_k.requires_grad_(True)
-    
+
+        # attn.sub_norm_k = copy.deepcopy(attn.norm_k)
+        # attn.add_module("sub_norm_k", attn.sub_norm_k)
+        # attn.sub_norm_k.requires_grad_(True)
+
+        # attn.to_k.requires_grad_(True)
+        # attn.to_v.requires_grad_(True)
+        
+        
+        
     for i, block in enumerate(flux_transformer.single_transformer_blocks):
         block.sub_norm = copy.deepcopy(block.norm)
         block.add_module("sub_norm", block.sub_norm)
+        block.sub_norm.requires_grad_(True)
         
         attn = block.attn
         attn.sub_to_k = copy.deepcopy(attn.to_k)
         attn.add_module("sub_to_k", attn.sub_to_k)
+        attn.sub_to_k.requires_grad_(True)
 
         attn.sub_to_v = copy.deepcopy(attn.to_v)
         attn.add_module("sub_to_v", attn.sub_to_v)
-
-        attn.sub_norm_k = copy.deepcopy(attn.norm_k)
-        attn.add_module("sub_norm_k", attn.sub_norm_k)
-
-        block.sub_norm.requires_grad_(True)
-        attn.sub_to_k.requires_grad_(True)
         attn.sub_to_v.requires_grad_(True)
-        attn.sub_norm_k.requires_grad_(True)
+
+        # attn.sub_norm_k = copy.deepcopy(attn.norm_k)
+        # attn.add_module("sub_norm_k", attn.sub_norm_k)
+        # attn.sub_norm_k.requires_grad_(True)
+        
+        # attn.to_k.requires_grad_(True)
+        # attn.to_v.requires_grad_(True)
 
     # get trainable params for optimizer
     trainable_params = get_trainable_params(flux_transformer)
     trainable_params_name = get_trainable_params_name(flux_transformer)
+    
     if args.scale_lr:
         args.learning_rate = (args.learning_rate * args.gradient_accumulation_steps * args.train_batch_size * accelerator.num_processes)
         
@@ -861,40 +902,6 @@ def main(config_path=None, config_file=None):
     
     train_dataset = ConcatDataset(dataset_to_train)
     
-    def collate_fn(examples):
-        target_image = torch.stack([example["target_image"] for example in examples]) 
-        target_image = target_image.to(memory_format=torch.contiguous_format).float()
-            
-        # input_ids_one = torch.stack([example["input_ids"] for example in examples])
-        # subject_input_ids_one = torch.vstack([padding_subjects(example["subject_input_ids"], example["padding_num"]) for example in examples])
-        
-        # input_ids_two = torch.stack([example["input_ids_two"] for example in examples])
-        # subject_input_ids_two = torch.vstack([padding_subjects(example["subject_input_ids_two"], example["padding_num"]) for example in examples])
-        
-        subject_images = torch.vstack([example["subject_images"] for example in examples]) # B * N, C, W, H
-        # we need to mask out the black padded subject imagee
-        # padding_nums = torch.tensor([example["padding_num"] for example in examples])
-        
-        # if not args.with_staged_timestep:
-        #     timesteps = torch.randint(0, 1000, (args.train_batch_size, ))
-        # else:
-        #     # some training hyperparams
-        #     timesteps = []
-        #     for example in examples: # following anydoor [0 ... High Res ... T/2 ... Low Res ... T]
-        #         if example["dataset_name"] in ["vitonHD", "youtubeVIS", "coco2014"]: # low quality for the early stages 
-        #             timesteps.append(min(random.randint(int(noise_scheduler.config.num_train_timesteps // 3), noise_scheduler.config.num_train_timesteps - 1), 999))
-        #         else:
-        #             t = random.randint(0, int(2 * noise_scheduler.config.num_train_timesteps // 3 - 1))
-        #             timesteps.append(min(t, 999))
-            
-        #     timesteps = torch.tensor(timesteps).reshape((args.train_batch_size,))
-
-        # target_noise = torch.randn((args.train_batch_size, 16, args.resolution // 8, args.resolution // 8), dtype=weight_dtype)
-        # subject_noise = torch.randn((1, 16, args.resolution // 8, args.resolution // 8), dtype=weight_dtype)
-        target_prompt = [example["target_prompt"] for example in examples]
-        subject_prompt = [example["subject_prompt"][0] if type(example["subject_prompt"]) == list else example["subject_prompt"] for example in examples]
-        subject_prompt = [example["subject_prompt"] for example in examples]
-        return {"target_image": target_image, "input_ids_one": None, "input_ids_two": None,  "subject_input_ids_one": None, "subject_input_ids_two": None, "subject_images": subject_images, "padding_num": None, "dataset_name": [example["dataset_name"] for example in examples], "timesteps": None, "target_prompt": target_prompt, "subject_prompt": subject_prompt, "target_noise": None, "subject_noise": None}
     
     # DataLoaders creation:
     train_dataloader = torch.utils.data.DataLoader(
@@ -904,6 +911,7 @@ def main(config_path=None, config_file=None):
         batch_size=args.train_batch_size,
         num_workers=args.dataloader_num_workers,
         pin_memory=True,
+        multiprocessing_context='fork',
         drop_last=True
     )
 

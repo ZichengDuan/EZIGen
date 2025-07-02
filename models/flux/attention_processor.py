@@ -1038,7 +1038,6 @@ class MochiAttnProcessor2_0:
             encoder_key = attn.norm_added_k(encoder_key)
 
         if image_rotary_emb is not None:
-
             def apply_rotary_emb(x, freqs_cos, freqs_sin):
                 x_even = x[..., 0::2].float()
                 x_odd = x[..., 1::2].float()
@@ -2309,10 +2308,19 @@ class FluxAttnProcessor2_0:
             query = attn.to_q(hidden_states)
             # key = attn.to_k(torch.cat([hidden_states, subject_feature], dim=1)) # cross attn
             # value = attn.to_v(torch.cat([hidden_states, subject_feature], dim=1)) # cross attn
+            key = attn.to_k(hidden_states)
+            value = attn.to_v(hidden_states)
+            
+            sub_key = attn.sub_to_k(subject_feature) # addition cross attn
+            sub_value = attn.sub_to_v(subject_feature) # addition cross attn
+            
+            key = torch.cat([key, sub_key], dim=1)
+            value = torch.cat([value, sub_value], dim=1)
+            
             # key = attn.to_k(subject_feature) # cross attn
             # value = attn.to_v(subject_feature) # cross attn
-            key = attn.to_k(hidden_states) # cross attn
-            value = attn.to_v(hidden_states) # cross attn
+            # key = attn.to_k(hidden_states) # cross attn
+            # value = attn.to_v(hidden_states) # cross attn
             # new_x = x + Attn(x) -> new_x = Attn(x)
         else:
             # original 
@@ -2333,7 +2341,6 @@ class FluxAttnProcessor2_0:
             key = attn.norm_k(key)
         
         # if subject_feature is not None:
-        #     breakpoint()
         #     # do additional attention for reference feature
         #     sub_query = attn.to_q(subject_feature)
         #     sub_key = attn.to_q(subject_feature)
