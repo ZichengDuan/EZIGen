@@ -70,7 +70,7 @@ dataloader_num_workers: 16
 
 # validation and checkpointing
 checkpoints_total_limit: 3
-resume_from_checkpoint: null
+resume_from_checkpoint: latest
 dreambench_output_dir: null
 report_to: "tensorboard"
 tracker_project_name: "tensorboard"
@@ -78,34 +78,34 @@ logging_dir: logs
 infer_logging_dir: logs_infer
 
 # validation and inference setting
-infer_steps: 20
+infer_steps: 30
 initial_loop: false
-split_ratio: 0.8
+split_ratio: 0.9
 
 # validation images
-target_prompt_1: "a backpack on the beach."
+target_prompt_1: "a corgi in police jacket, sitting on a rock in the park."
 subject_prompt_1:  
-  - "a photo of a backpack."
+  - "a photo of a dog."
 subject_img_paths_1:
-  - "example_images/subjects/backpack.png"
+  - "example_images/subjects/dog.png"
 
-target_prompt_2: "a dog under a tree."
+target_prompt_2: "a brown cat walking on a cobblestone street in a historical street."
 subject_prompt_2: 
-  - "a photo of a dog."
+  - "a photo of a cat."
 subject_img_paths_2:
-  - "example_images/subjects/corgi_1024.png"
+  - "example_images/subjects/cat.png"
 
-target_prompt_3: "a dog in police outfit."
+target_prompt_3: "a white boot on the grass."
 subject_prompt_3: 
-  - "a photo of a dog."
+  - "a photo of a boot."
 subject_img_paths_3:
-  - "example_images/subjects/corgi_1024.png"
+  - "example_images/subjects/boot.png"
 
-target_prompt_4: "a woman wearing a rainbow scarf."
+target_prompt_4: "a gray backpack on the beach."
 subject_prompt_4: 
-  - "a photo of a woman."
+  - "a photo of a backpack."
 subject_img_paths_4:
-  - "example_images/subjects/lff_1024.png"
+  - "example_images/subjects/backpack_dog.png"
 
 
 # defaults

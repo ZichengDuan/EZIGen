@@ -1383,9 +1383,6 @@ def extract_subject_features_sdxl(args, image_paths, reference_unet, text_encode
     return subject_features
 
 
-# def extract_subject_features_flux():
-
-
 
 def visualize_latent(latent: torch.Tensor, vae, generator=None):
     if generator is None:

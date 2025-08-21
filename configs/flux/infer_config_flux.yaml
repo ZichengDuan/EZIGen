@@ -1,0 +1,45 @@
+# checkpoint name
+pretrained_model_name_or_path: hf_cache/black-forest-labs--FLUX.1-dev
+clip_path: ViT-B/32 # or simply "ViT-B/32" and let transformers module do its job
+output_dir: experiments/train/train_sdxl
+vae_path: madebyollin/sdxl-vae-fp16-fix
+
+# checkpoint_path: experiments/staged_training/checkpoint-39790 # e.g. checkpoint-200000
+# checkpoint_path: prev_exp/train/train_sdxl_more_data/checkpoint-39790 # e.g. checkpoint-200000
+# checkpoint_path: prev_exp/train/train_sdxl/checkpoint-9200 # e.g. checkpoint-200000
+# checkpoint_path: /root/debug_ckpt/checkpoint-24000 # e.g. checkpoint-200000
+checkpoint_path: experiments/train/flux_vanilla_ft/checkpoint-14690/pytorch_model.bin # e.g. checkpoint-200000
+# checkpoint_path: /mnt/workspace/workgroup/duanzicheng.dzc/checkpoints/ezigen/debug/fp16_ckpt/diffusion_pytorch_model.bin # e.g. checkpoint-200000
+
+# system defaults, !no need to change anything here!
+mixed_precision: 'bf16'
+local_rank: 0 # we only do inference on a single GPU
+resolution: 512
+subject_timestep: 1.0
+add_before_ca: true
+sub_feat_position: "before_sa"
+insert_adapter_at: all
+gradient_accumulation_steps: 1
+revision: null
+non_ema_revision: null
+enable_xformers_memory_efficient_attention: false
+allow_tf32: false
+scale_lr: false
+use_8bit_adam: false
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_weight_decay: 0.01
+adam_epsilon: 0.00000001
+max_grad_norm: 1.0
+push_to_hub: false
+hub_token: null
+prediction_type: null
+hub_model_id: null
+dataloader_num_workers: 0
+max_train_steps: null
+snr_gamma: null
+variant: null
+residual_connection: false
+
+# no need to change
+infer_mode: true # we are now infer mode

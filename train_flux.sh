@@ -4,11 +4,11 @@ export NO_ALBUMENTATIONS_UPDATE=1
 
 # === 手动定义节点名和每个节点的 GPU 编号 ===
 NODES=("g081" "g067" "g092")  # 顺序决定 node_rank
-NODES=("g107" "g085")  # 顺序决定 node_rank
-# NODES=("g085")
+NODES=("g061" "g055")  # 顺序决定 node_rank
+# NODES=("g061")
 CUDA_VISIBLE_DEVICES_LIST=("0,1,2,3" "0,1,2,3" "0,1")  # 一一对应
 CUDA_VISIBLE_DEVICES_LIST=("0,1,2,3" "0,1,2,3")  # 一一对应
-# CUDA_VISIBLE_DEVICES_LIST=("0,1,2")  # 一一对应
+# CUDA_VISIBLE_DEVICES_LIST=("0,1,2,3")  # 一一对应
 # CUDA_VISIBLE_DEVICES_LIST=("0")  # 一一对应
 
 # === 自动识别当前节点名 ===

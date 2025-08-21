@@ -278,7 +278,7 @@ def iteration_wrapper(args, accelerator, subject_img_paths, main_unet, reference
                                 negative_prompt="dark, blur, defoucus, lack of content, dizzy.",
                                 guidance_scale=args.guidance_scale
                                 ) 
-
+        
         pure_text_image = res_origin["images"][0]
         pure_text_image.save(f"{output_root}/{target_prompt}{post_fix}/pure_text_image.png")
     

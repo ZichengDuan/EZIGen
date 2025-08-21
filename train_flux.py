@@ -1061,10 +1061,14 @@ def main(config_path=None, config_file=None):
         "tokenizer_2": tokenizer_two,
         "scheduler": noise_scheduler,
     }
-    subject_noise = torch.randn((1, 16, args.resolution // 8, args.resolution // 8), dtype=weight_dtype)
-    # pipeline_modules["transformer"] = accelerator.unwrap_model(flux_transformer)
-    # vis_images = log_validation_batch(pipeline_modules, noise_scheduler_copy, subject_noise, train_transforms, args, accelerator, weight_dtype, 1, batch_text_prompts, batch_origin_text_prompts, batch_subject_prompts, batch_img_paths, batch_variation_num, clip_model, clip_processor)
+    if accelerator.is_main_process:
+        subject_noise = torch.randn((1, 16, args.resolution // 8, args.resolution // 8), dtype=weight_dtype)
+        pipeline_modules["transformer"] = accelerator.unwrap_model(flux_transformer)
+        vis_images = log_validation_batch(pipeline_modules, flux_transformer_copy, noise_scheduler_copy, subject_noise, train_transforms, args, accelerator, weight_dtype, 1, batch_text_prompts, batch_origin_text_prompts, batch_subject_prompts, batch_img_paths, batch_variation_num, clip_model, clip_processor)
     
+    accelerator.wait_for_everyone()
+    # sys.exit(0)
+
     for epoch in range(first_epoch, args.num_train_epochs):
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
@@ -1177,7 +1181,7 @@ def main(config_path=None, config_file=None):
 
             # flow matching loss
             target = noise - model_input
-
+            
             # Compute regular loss.
             flux_loss = torch.mean((weighting.float() * (model_pred.float() - target.float()) ** 2).reshape(target.shape[0], -1),1)
             flux_loss = flux_loss.mean()
